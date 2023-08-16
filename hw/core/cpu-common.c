@@ -89,12 +89,14 @@ void cpu_exit(CPUState *cpu)
     qatomic_set(&cpu->icount_decr_ptr->u16.high, -1);
 }
 
-static int cpu_common_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg)
+static int cpu_common_gdb_read_register(CPUState *cpu, GByteArray *buf, int reg,
+                                        bool has_xml)
 {
     return 0;
 }
 
-static int cpu_common_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg)
+static int cpu_common_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg,
+                                         bool has_xml)
 {
     return 0;
 }
@@ -209,12 +211,22 @@ static void cpu_common_realizefn(DeviceState *dev, Error **errp)
         cpu_resume(cpu);
     }
 
+    /* Plugin initialization must wait until the cpu is fully realized. */
+    if (tcg_enabled()) {
+        qemu_plugin_vcpu_init_hook(cpu);
+    }
+
     /* NOTE: latest generic point where the cpu is fully realized */
 }
 
 static void cpu_common_unrealizefn(DeviceState *dev)
 {
     CPUState *cpu = CPU(dev);
+
+    /* Call the plugin hook before clearing the cpu is fully unrealized */
+    if (tcg_enabled()) {
+        qemu_plugin_vcpu_exit_hook(cpu);
+    }
 
     /* NOTE: latest generic point before the cpu is fully unrealized */
     cpu_exec_unrealizefn(cpu);

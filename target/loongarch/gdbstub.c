@@ -30,7 +30,8 @@ void write_fcc(CPULoongArchState *env, uint64_t val)
     }
 }
 
-int loongarch_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
+int loongarch_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n,
+                                    bool has_xml)
 {
     LoongArchCPU *cpu = LOONGARCH_CPU(cs);
     CPULoongArchState *env = &cpu->env;
@@ -48,7 +49,8 @@ int loongarch_cpu_gdb_read_register(CPUState *cs, GByteArray *mem_buf, int n)
     return 0;
 }
 
-int loongarch_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n)
+int loongarch_cpu_gdb_write_register(CPUState *cs, uint8_t *mem_buf, int n,
+                                     bool has_xml)
 {
     LoongArchCPU *cpu = LOONGARCH_CPU(cs);
     CPULoongArchState *env = &cpu->env;
@@ -101,5 +103,5 @@ static int loongarch_gdb_set_fpu(CPULoongArchState *env,
 void loongarch_cpu_register_gdb_regs_for_features(CPUState *cs)
 {
     gdb_register_coprocessor(cs, loongarch_gdb_get_fpu, loongarch_gdb_set_fpu,
-                             41, "loongarch-fpu.xml", 0);
+                             gdb_find_static_feature("loongarch-fpu.xml"), 0);
 }
