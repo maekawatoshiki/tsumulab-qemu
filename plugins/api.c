@@ -317,6 +317,11 @@ char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn)
                         insn->vaddr, insn->len);
 }
 
+void qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn, rv_decode *dec)
+{
+    plugin_decode(tcg_ctx->cpu, tcg_ctx->plugin_db, insn->vaddr, insn->len, dec);
+}
+
 const char *qemu_plugin_insn_symbol(const struct qemu_plugin_insn *insn)
 {
     const char *sym = lookup_symbol(insn->vaddr);
@@ -640,6 +645,16 @@ uint64_t qemu_plugin_u64_sum(qemu_plugin_u64 entry)
     return total;
 }
 
+int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len)
+{
+    return gdb_read_mem(current_cpu, addr, buf, len);
+}
+
+int qemu_plugin_walk_memory_regions(void *priv, walk_memory_regions_generic_fn fn)
+{
+    return walk_memory_regions_generic(priv, fn);
+}
+
 /*
  * Time control
  */
@@ -681,3 +696,4 @@ void qemu_plugin_update_ns(const void *handle, int64_t new_time)
     }
 #endif
 }
+

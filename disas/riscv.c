@@ -27,6 +27,8 @@
 #include "disas/riscv-xthead.h"
 #include "disas/riscv-xventana.h"
 
+#if 0
+
 typedef enum {
     /* 0 is reserved for rv_op_illegal. */
     rv_op_lui = 1,
@@ -985,6 +987,8 @@ typedef enum {
     rv_op_c_sspush = 954,
     rv_op_c_sspopchk = 955,
 } rv_op;
+
+#endif
 
 /* register names */
 
@@ -4558,6 +4562,7 @@ static void decode_inst_operands(rv_decode *dec, rv_isa isa)
     const rv_opcode_data *opcode_data = dec->opcode_data;
     rv_inst inst = dec->inst;
     dec->codec = opcode_data[dec->op].codec;
+    dec->rd = dec->rs1 = dec->rs2 = dec->rs3 = rv_ireg_zero;
     switch (dec->codec) {
     case rv_codec_none:
         dec->rd = dec->rs1 = dec->rs2 = rv_ireg_zero;
@@ -4774,8 +4779,8 @@ static void decode_inst_operands(rv_decode *dec, rv_isa isa)
         break;
     case rv_codec_cr_mv:
         dec->rd = operand_crd(inst);
-        dec->rs1 = operand_crs2(inst);
-        dec->rs2 = rv_ireg_zero;
+        dec->rs1 = rv_ireg_zero;
+        dec->rs2 = operand_crs2(inst);
         dec->imm = 0;
         break;
     case rv_codec_cr_jalr:
@@ -5457,6 +5462,58 @@ static GString *disasm_inst(rv_isa isa, uint64_t pc, rv_inst inst,
     return format_inst(24, &dec);
 }
 
+static void decode_inst(rv_decode *dec, rv_isa isa, uint64_t pc, rv_inst inst, RISCVCPUConfig *cfg)
+{
+    dec->pc = pc;
+    dec->inst = inst;
+    dec->cfg = cfg;
+
+    static const struct
+    {
+        bool (*guard_func)(const RISCVCPUConfig *);
+        const rv_opcode_data *opcode_data;
+        void (*decode_func)(rv_decode *, rv_isa);
+    } decoders[] = {
+        {always_true_p, rvi_opcode_data, decode_inst_opcode},
+        {has_xtheadba_p, xthead_opcode_data, decode_xtheadba},
+        {has_xtheadbb_p, xthead_opcode_data, decode_xtheadbb},
+        {has_xtheadbs_p, xthead_opcode_data, decode_xtheadbs},
+        {has_xtheadcmo_p, xthead_opcode_data, decode_xtheadcmo},
+        {has_xtheadcondmov_p, xthead_opcode_data, decode_xtheadcondmov},
+        {has_xtheadfmemidx_p, xthead_opcode_data, decode_xtheadfmemidx},
+        {has_xtheadfmv_p, xthead_opcode_data, decode_xtheadfmv},
+        {has_xtheadmac_p, xthead_opcode_data, decode_xtheadmac},
+        {has_xtheadmemidx_p, xthead_opcode_data, decode_xtheadmemidx},
+        {has_xtheadmempair_p, xthead_opcode_data, decode_xtheadmempair},
+        {has_xtheadsync_p, xthead_opcode_data, decode_xtheadsync},
+        {has_XVentanaCondOps_p, ventana_opcode_data, decode_xventanacondops},
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(decoders); i++)
+    {
+        bool (*guard_func)(const RISCVCPUConfig *) = decoders[i].guard_func;
+        const rv_opcode_data *opcode_data = decoders[i].opcode_data;
+        void (*decode_func)(rv_decode *, rv_isa) = decoders[i].decode_func;
+
+        if (guard_func(cfg))
+        {
+            dec->opcode_data = opcode_data;
+            decode_func(dec, isa);
+            if (dec->op != rv_op_illegal)
+                break;
+        }
+    }
+
+    if (dec->op == rv_op_illegal)
+    {
+        dec->opcode_data = rvi_opcode_data;
+    }
+
+    decode_inst_operands(dec, isa);
+    decode_inst_decompress(dec, isa);
+    decode_inst_lift_pseudo(dec);
+}
+
 #define INST_FMT_2 "%04" PRIx64 "              "
 #define INST_FMT_4 "%08" PRIx64 "          "
 #define INST_FMT_6 "%012" PRIx64 "      "
@@ -5512,6 +5569,39 @@ print_insn_riscv(bfd_vma memaddr, struct disassemble_info *info, rv_isa isa)
     return len;
 }
 
+static int decode_insn_riscv(bfd_vma memaddr, struct disassemble_info *info, rv_isa isa, rv_decode *dec)
+{
+    bfd_byte packet[2];
+    rv_inst inst = 0;
+    size_t len = 2;
+    bfd_vma n;
+    int status;
+
+    /* Instructions are made of 2-byte packets in little-endian order */
+    for (n = 0; n < len; n += 2)
+    {
+        status = (*info->read_memory_func)(memaddr + n, packet, 2, info);
+        if (status != 0)
+        {
+            /* Don't fail just because we fell off the end.  */
+            if (n > 0)
+            {
+                break;
+            }
+            (*info->memory_error_func)(status, memaddr, info);
+            return status;
+        }
+        inst |= ((rv_inst)bfd_getl16(packet)) << (8 * n);
+        if (n == 0) {
+            len = inst_length(inst);
+        }
+    }
+
+    decode_inst(dec, isa, memaddr, inst, (RISCVCPUConfig *)info->target_info);
+
+    return len;
+}
+
 int print_insn_riscv32(bfd_vma memaddr, struct disassemble_info *info)
 {
     return print_insn_riscv(memaddr, info, rv32);
@@ -5525,4 +5615,19 @@ int print_insn_riscv64(bfd_vma memaddr, struct disassemble_info *info)
 int print_insn_riscv128(bfd_vma memaddr, struct disassemble_info *info)
 {
     return print_insn_riscv(memaddr, info, rv128);
+}
+
+int decode_insn_riscv32(bfd_vma memaddr, struct disassemble_info *info, rv_decode *dec)
+{
+    return decode_insn_riscv(memaddr, info, rv32, dec);
+}
+
+int decode_insn_riscv64(bfd_vma memaddr, struct disassemble_info *info, rv_decode *dec)
+{
+    return decode_insn_riscv(memaddr, info, rv64, dec);
+}
+
+int decode_insn_riscv128(bfd_vma memaddr, struct disassemble_info *info, rv_decode *dec)
+{
+    return decode_insn_riscv(memaddr, info, rv128, dec);
 }

@@ -1,4 +1,13 @@
 ===========
+`./build.sh` is all you need!
+===========
+
+.. code-block::
+
+  # Build qemu and trace plugin
+  ./build.sh
+
+===========
 QEMU README
 ===========
 

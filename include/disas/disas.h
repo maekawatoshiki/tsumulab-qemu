@@ -1,6 +1,8 @@
 #ifndef QEMU_DISAS_H
 #define QEMU_DISAS_H
 
+#include "disas/riscv.h"
+
 /* Disassemble this for me please... (debugging). */
 #ifdef CONFIG_TCG
 void disas(FILE *out, const void *code, size_t size);
@@ -13,6 +15,8 @@ void monitor_disas(Monitor *mon, CPUState *cpu, uint64_t pc,
 #ifdef CONFIG_PLUGIN
 char *plugin_disas(CPUState *cpu, const DisasContextBase *db,
                    uint64_t addr, size_t size);
+void plugin_decode(CPUState *cpu, const DisasContextBase *db,
+                   uint64_t addr, size_t size, rv_decode *dec);
 #endif
 
 /* Look up symbol for debugging purpose.  Returns "" if unknown. */

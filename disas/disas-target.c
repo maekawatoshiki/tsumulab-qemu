@@ -96,4 +96,22 @@ char *plugin_disas(CPUState *cpu, const DisasContextBase *db,
     /* Return the buffer, freeing the GString container.  */
     return g_string_free(ds, false);
 }
+
+void plugin_decode(CPUState *cpu, const DisasContextBase *db, uint64_t addr, size_t size, rv_decode *dec)
+{
+    CPUDebug s;
+
+    disas_initialize_debug_target(&s, cpu);
+    s.info.read_memory_func = translator_read_memory;
+    s.info.application_data = (void *)db;
+    s.info.fprintf_func = disas_gstring_printf;
+    // s.info.stream = (FILE *)ds;  /* abuse this slot */
+    s.info.buffer_vma = addr;
+    s.info.buffer_length = size;
+    s.info.print_address_func = plugin_print_address;
+
+    assert(s.info.decode_insn);
+    s.info.decode_insn(addr, &s.info, dec);
+}
+
 #endif /* CONFIG_PLUGIN */

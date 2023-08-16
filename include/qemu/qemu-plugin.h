@@ -248,6 +248,8 @@ typedef struct {
     size_t offset;
 } qemu_plugin_u64;
 
+struct rv_decode;
+
 /**
  * enum qemu_plugin_cb_flags - type of callback
  *
@@ -758,6 +760,9 @@ qemu_plugin_register_vcpu_syscall_ret_cb(qemu_plugin_id_t id,
 QEMU_PLUGIN_API
 char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn);
 
+QEMU_PLUGIN_API
+void qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn, struct rv_decode *dec);
+
 /**
  * qemu_plugin_insn_symbol() - best effort symbol lookup
  * @insn: instruction reference
@@ -1001,5 +1006,21 @@ void qemu_plugin_u64_set(qemu_plugin_u64 entry, unsigned int vcpu_index,
  */
 QEMU_PLUGIN_API
 uint64_t qemu_plugin_u64_sum(qemu_plugin_u64 entry);
+
+/**
+ * qemu_plugin_read_memory() - read memory value
+ * @buf: buffer to read into
+ * @addr: address to read from
+ * @len: number of bytes to read
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+QEMU_PLUGIN_API
+int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len);
+
+// qemu_plugin_walk_memory_regions() - walk memory regions
+typedef int (*walk_memory_regions_generic_fn)(void *, uint64_t,
+                                      uint64_t, unsigned long);
+int qemu_plugin_walk_memory_regions(void *, walk_memory_regions_generic_fn);
 
 #endif /* QEMU_QEMU_PLUGIN_H */
