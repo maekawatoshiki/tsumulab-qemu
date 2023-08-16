@@ -9356,7 +9356,15 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
 #endif
     case TARGET_NR_close:
         fd_trans_unregister(arg1);
-        return get_errno(close(arg1));
+        switch (arg1) {
+        case STDIN_FILENO:
+        case STDOUT_FILENO:
+        case STDERR_FILENO:
+            // Never close them.
+            return 0;
+        default:
+            return get_errno(close(arg1));
+        }
 #if defined(__NR_close_range) && defined(TARGET_NR_close_range)
     case TARGET_NR_close_range:
         ret = get_errno(sys_close_range(arg1, arg2, arg3));
