@@ -1,4 +1,8 @@
 ===========
+`./build.sh` is all you need!
+===========
+
+===========
 QEMU README
 ===========
 
