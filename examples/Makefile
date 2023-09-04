@@ -18,8 +18,12 @@ run: fibo #! Run fibo
 run_plugin: fibo #! Run fibo with plugin (e.g. make run_plugin PLUGIN=libinsn.so)
 	../build/qemu-riscv32 -d plugin -plugin ../build/tests/plugin/$(PLUGIN) fibo
 
+plugins: #! Build our plugins
+	make -C ./plugins
+
 clean: #! Remove generated binaries
 	rm -f fibo
+	make clean -C ./plugins
 
 help: #! Show this help
 	@echo 'Usage: make [target]'
