@@ -9,22 +9,176 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <fstream>
 #include <iostream>
 #include <optional>
+#include <vector>
 
 static GRWLock expand_array_lock;
 
 class Ctx {
   private:
-    std::optional<const rv_decode *> last_br;
+    std::optional<const rv_decode *> pending_br;
 
   public:
-    void clear_br() { last_br = std::nullopt; }
-    void set_br(const rv_decode *dec) { last_br = dec; }
-    std::optional<const rv_decode *> get_br() { return last_br; }
+    Ctx() {
+        this->trace_out.open("trace.out", std::ios::binary | std::ios::out);
+        assert(this->trace_out.is_open());
+
+        this->reg_buf = g_byte_array_new();
+    }
+    ~Ctx() {
+        this->trace_out.flush();
+        this->trace_out.close();
+    }
+
+    std::ofstream trace_out;
+    GByteArray *reg_buf;
+
+    void clear_br() { pending_br = std::nullopt; }
+    void set_br(const rv_decode *dec) { pending_br = dec; }
+    std::optional<const rv_decode *> get_br() const { return pending_br; }
 };
 
 static Ctx ctx;
+
+static void trace_alu(const uint8_t inst_type, const uint64_t pc,
+                      const std::vector<uint64_t> &input_regs, const uint8_t rd,
+                      const uint64_t val) {
+    assert(inst_type == 0 || inst_type == 6 || inst_type == 7);
+    uint8_t num_input_regs = input_regs.size();
+    uint8_t num_output_regs = 1;
+    ctx.trace_out.write((char *)&pc, sizeof(pc));
+    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
+    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    for (int i = 0; i < num_input_regs; i++) {
+        assert(input_regs[i] < 256);
+        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+    }
+    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    assert(rd < 0x7f);
+    ctx.trace_out.write((char *)&rd, sizeof(rd));
+    if (rd < 0x20) { // int reg
+        ctx.trace_out.write((char *)&val, 8);
+    } else { // fp reg
+        assert(false && "Not implemented: fp reg");
+    }
+}
+
+// static void write_alu(FILE *trace, const uint8_t inst_type, const uint64_t
+// pc,
+//                       const std::vector<uint64_t> &input_regs, const uint8_t
+//                       rd, const freg_t val) {
+//   assert(inst_type == 0 || inst_type == 6 || inst_type == 7);
+//   uint8_t num_input_regs = input_regs.size();
+//   uint8_t num_output_regs = 1;
+//   fwrite(&pc, sizeof(pc), 1, trace);
+//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
+//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
+//   for (int i = 0; i < num_input_regs; i++) {
+//     assert(input_regs[i] < 256);
+//     fwrite(&input_regs[i], sizeof(uint8_t), 1, trace);
+//   }
+//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
+//   assert(rd < RFSIZE);
+//   fwrite(&rd, sizeof(rd), 1, trace);
+//   if (rd < 0x20) { // int reg
+//     fwrite(&val.v, 8, 1, trace);
+//   } else { // fp reg
+//     fwrite(&val.v, 16, 1, trace);
+//   }
+// }
+//
+// static void write_load(FILE *trace, const uint64_t pc,
+//                        const uint64_t effective_addr, const uint8_t
+//                        access_size, const std::vector<uint64_t> &input_regs,
+//                        const uint8_t rd, const freg_t val) {
+//   uint8_t inst_type = 1;
+//   uint8_t num_input_regs = input_regs.size();
+//   uint8_t num_output_regs = 1;
+//   fwrite(&pc, sizeof(pc), 1, trace);
+//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
+//   fwrite(&effective_addr, sizeof(effective_addr), 1, trace);
+//   fwrite(&access_size, sizeof(access_size), 1, trace);
+//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
+//   for (int i = 0; i < num_input_regs; i++) {
+//     assert(input_regs[i] < 256);
+//     fwrite(&input_regs[i], sizeof(uint8_t), 1, trace);
+//   }
+//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
+//   assert(rd < RFSIZE);
+//   fwrite(&rd, sizeof(rd), 1, trace);
+//   if (rd < 0x20) { // int reg
+//     fwrite(&val.v, 8, 1, trace);
+//   } else { // fp reg
+//     fwrite(&val.v, 16, 1, trace);
+//   }
+// }
+//
+// static void write_store(FILE *trace, const uint64_t pc,
+//                         const uint64_t effective_addr,
+//                         const uint8_t access_size,
+//                         const std::vector<uint64_t> &input_regs) {
+//   uint8_t inst_type = 2;
+//   uint8_t num_input_regs = input_regs.size();
+//   uint8_t num_output_regs = 0;
+//   fwrite(&pc, sizeof(pc), 1, trace);
+//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
+//   fwrite(&effective_addr, sizeof(effective_addr), 1, trace);
+//   fwrite(&access_size, sizeof(access_size), 1, trace);
+//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
+//   for (int i = 0; i < num_input_regs; i++) {
+//     assert(input_regs[i] < 256);
+//     fwrite(&input_regs[i], sizeof(uint8_t), 1, trace);
+//   }
+//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
+// }
+//
+// static void
+// write_br(FILE *trace, const uint8_t inst_type, const uint64_t pc,
+//          const uint8_t taken, const uint64_t npc,
+//          const std::vector<uint64_t> &input_regs,
+//          const std::vector<std::pair<uint8_t, freg_t>> &output_regs) {
+//   assert(inst_type == 3 || inst_type == 4 || inst_type == 5 || inst_type == 9
+//   ||
+//          inst_type == 0xa);
+//   uint8_t num_input_regs = input_regs.size();
+//   uint8_t num_output_regs = output_regs.size();
+//   fwrite(&pc, sizeof(pc), 1, trace);
+//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
+//   fwrite(&taken, sizeof(taken), 1, trace);
+//   if (taken == 1) {
+//     fwrite(&npc, sizeof(npc), 1, trace);
+//   }
+//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
+//   for (int i = 0; i < num_input_regs; i++) {
+//     assert(input_regs[i] < 256);
+//     fwrite(&input_regs[i], sizeof(uint8_t), 1, trace);
+//   }
+//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
+//   for (int i = 0; i < num_output_regs; i++) {
+//     uint8_t rd = output_regs[i].first;
+//     freg_t val = output_regs[i].second;
+//     assert(rd < RFSIZE);
+//     fwrite(&rd, sizeof(rd), 1, trace);
+//     if (rd < 0x20) { // int reg
+//       fwrite(&val.v, 8, 1, trace);
+//     } else { // fp reg
+//       fwrite(&val.v, 16, 1, trace);
+//     }
+//   }
+// }
+//
+// static void write_simple(FILE *trace, const uint8_t inst_type,
+//                          const uint64_t pc) {
+//   assert(inst_type == 0xb || inst_type == 0xc || inst_type == 0x7);
+//   uint8_t num_input_regs = 0;
+//   uint8_t num_output_regs = 0;
+//   fwrite(&pc, sizeof(pc), 1, trace);
+//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
+//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
+//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
+// }
 
 /**
  * Add memory read or write information to current instruction log
@@ -79,9 +233,12 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     g_rw_lock_writer_unlock(&expand_array_lock);
 }
 
-/**
- * Log instruction execution
- */
+static uint32_t reg_val(const uint8_t reg) {
+    const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
+    assert(n == 4);
+    return *((uint32_t *)ctx.reg_buf->data);
+}
+
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     const rv_decode *dec = (rv_decode *)udata;
     const uint64_t opcode = dec->inst & 0x7f;
@@ -91,27 +248,42 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     if (const auto br = ctx.get_br()) {
         const auto prev_pc = (*br)->pc;
         const auto cur_pc = dec->pc;
+#if 0
         if (prev_pc + 4 == cur_pc)
             puts("condBranchInstClass(not taken)");
         else {
             printf("condBranchInstClass(taken, %lx -> %lx)\n", prev_pc, cur_pc);
         }
+#endif
         ctx.clear_br();
     }
 
+#define puts(_)                                                                \
+    do {                                                                       \
+    } while (0)
+
     switch (opcode) {
     case 0x37:
-    case 0x17:
+    case 0x17: {
         puts("aluInstClass(lui, auipc)");
+        trace_alu(0, dec->pc, {}, dec->rd, reg_val(dec->rd));
         break;
-    case 0x13:
+    }
+    case 0x13: {
         puts("aluInstClass(alu(immediate))");
+        trace_alu(0, dec->pc, {dec->rs1}, dec->rd, reg_val(dec->rd));
         break;
+    }
     case 0x33:
-        if (alutype == 0x00 || alutype == 0x20)
+        if (alutype == 0x00 || alutype == 0x20) {
             puts("aluInstClass(alu)");
-        else if (alutype == 0x01)
+            trace_alu(0, dec->pc, {dec->rs1, dec->rs2}, dec->rd,
+                      reg_val(dec->rd));
+        } else if (alutype == 0x01) {
             puts("slowAluInstClass");
+            trace_alu(7, dec->pc, {dec->rs1, dec->rs1}, dec->rd,
+                      reg_val(dec->rd));
+        }
         break;
     case 0x03:
         if (alusize == 0x00 || alusize == 0x04)
@@ -197,7 +369,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         assert(false && "Unknown opcode");
         break;
     }
-    return;
+#undef puts
 
 #if 0
     /* Find or create vCPU in array */
@@ -250,6 +422,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
         insn = qemu_plugin_tb_get_insn(tb, i);
         // insn_disas = qemu_plugin_insn_disas(insn);
 
+        // We will never free `dec`.
         rv_decode *dec = (rv_decode *)malloc(sizeof(rv_decode));
         qemu_plugin_insn_decode(insn, dec);
 
@@ -279,6 +452,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
  */
 static void plugin_exit(qemu_plugin_id_t id, void *p) {
     assert(!ctx.get_br().has_value());
+    ctx.trace_out.flush();
+    ctx.trace_out.close();
     return;
 }
 
