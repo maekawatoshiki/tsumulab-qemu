@@ -65,56 +65,32 @@ static void trace_alu(const uint8_t inst_type, const uint64_t pc,
     }
 }
 
-// static void write_alu(FILE *trace, const uint8_t inst_type, const uint64_t
-// pc,
-//                       const std::vector<uint64_t> &input_regs, const uint8_t
-//                       rd, const freg_t val) {
-//   assert(inst_type == 0 || inst_type == 6 || inst_type == 7);
-//   uint8_t num_input_regs = input_regs.size();
-//   uint8_t num_output_regs = 1;
-//   fwrite(&pc, sizeof(pc), 1, trace);
-//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
-//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
-//   for (int i = 0; i < num_input_regs; i++) {
-//     assert(input_regs[i] < 256);
-//     fwrite(&input_regs[i], sizeof(uint8_t), 1, trace);
-//   }
-//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
-//   assert(rd < RFSIZE);
-//   fwrite(&rd, sizeof(rd), 1, trace);
-//   if (rd < 0x20) { // int reg
-//     fwrite(&val.v, 8, 1, trace);
-//   } else { // fp reg
-//     fwrite(&val.v, 16, 1, trace);
-//   }
-// }
-//
-// static void write_load(FILE *trace, const uint64_t pc,
-//                        const uint64_t effective_addr, const uint8_t
-//                        access_size, const std::vector<uint64_t> &input_regs,
-//                        const uint8_t rd, const freg_t val) {
-//   uint8_t inst_type = 1;
-//   uint8_t num_input_regs = input_regs.size();
-//   uint8_t num_output_regs = 1;
-//   fwrite(&pc, sizeof(pc), 1, trace);
-//   fwrite(&inst_type, sizeof(inst_type), 1, trace);
-//   fwrite(&effective_addr, sizeof(effective_addr), 1, trace);
-//   fwrite(&access_size, sizeof(access_size), 1, trace);
-//   fwrite(&num_input_regs, sizeof(num_input_regs), 1, trace);
-//   for (int i = 0; i < num_input_regs; i++) {
-//     assert(input_regs[i] < 256);
-//     fwrite(&input_regs[i], sizeof(uint8_t), 1, trace);
-//   }
-//   fwrite(&num_output_regs, sizeof(num_output_regs), 1, trace);
-//   assert(rd < RFSIZE);
-//   fwrite(&rd, sizeof(rd), 1, trace);
-//   if (rd < 0x20) { // int reg
-//     fwrite(&val.v, 8, 1, trace);
-//   } else { // fp reg
-//     fwrite(&val.v, 16, 1, trace);
-//   }
-// }
-//
+static void trace_load(const uint64_t pc, const uint64_t effective_addr,
+                       const uint8_t access_size,
+                       const std::vector<uint64_t> &input_regs,
+                       const uint8_t rd, const uint64_t val) {
+    uint8_t inst_type = 1;
+    uint8_t num_input_regs = input_regs.size();
+    uint8_t num_output_regs = 1;
+    ctx.trace_out.write((char *)&pc, sizeof(pc));
+    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
+    ctx.trace_out.write((char *)&effective_addr, sizeof(effective_addr));
+    ctx.trace_out.write((char *)&access_size, sizeof(access_size));
+    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    for (int i = 0; i < num_input_regs; i++) {
+        assert(input_regs[i] < 256);
+        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+    }
+    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    assert(rd < 0x7f);
+    ctx.trace_out.write((char *)&rd, sizeof(rd));
+    if (rd < 0x20) { // int reg
+        ctx.trace_out.write((char *)&val, 8);
+    } else { // fp reg
+        assert(false && "Not implemented: fp reg");
+    }
+}
+
 // static void write_store(FILE *trace, const uint64_t pc,
 //                         const uint64_t effective_addr,
 //                         const uint8_t access_size,
@@ -286,20 +262,40 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         }
         break;
     case 0x03:
-        if (alusize == 0x00 || alusize == 0x04)
+        if (alusize == 0x00 || alusize == 0x04) {
             puts("loadInstClass(b,ub)");
-        else if (alusize == 0x01 || alusize == 0x05)
+            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
+            trace_load(dec->pc, effaddr, 1, {dec->rs1}, dec->rd,
+                       reg_val(dec->rd));
+        } else if (alusize == 0x01 || alusize == 0x05) {
             puts("loadInstClass(h,uh)");
-        else if (alusize == 0x02)
+            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
+            trace_load(dec->pc, effaddr, 2, {dec->rs1}, dec->rd,
+                       reg_val(dec->rd));
+        } else if (alusize == 0x02) {
             puts("loadInstClass(w)");
-        else if (alusize == 0x03)
+            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
+            trace_load(dec->pc, effaddr, 4, {dec->rs1}, dec->rd,
+                       reg_val(dec->rd));
+        } else if (alusize == 0x03) {
             puts("loadInstClass(d)");
+            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
+            trace_load(dec->pc, effaddr, 8, {dec->rs1}, dec->rd,
+                       reg_val(dec->rd));
+        }
         break;
     case 0x07:
-        if (alusize == 0x02)
+        if (alusize == 0x02) {
             puts("fploadInstClass(w)");
-        else if (alusize == 0x03)
+            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
+            trace_load(dec->pc, effaddr, 4, {dec->rs1}, dec->rd,
+                       reg_val(dec->rd));
+        } else if (alusize == 0x03) {
             puts("fploadInstClass(d)");
+            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
+            trace_load(dec->pc, effaddr, 8, {dec->rs1}, dec->rd,
+                       reg_val(dec->rd));
+        }
         break;
     case 0x23:
         if (alusize == 0x00 || alusize == 0x04)
