@@ -266,30 +266,30 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
     guint i;
     for (i = 0; i < num_cpus; i++) {
         if (cpus[i].last_exec->str) {
-            /* qemu_plugin_outs(cpus[i].last_exec->str); */
+            qemu_plugin_outs(cpus[i].last_exec->str);
             qemu_plugin_outs("\n");
         }
     }
 }
 
 /* Add a match to the array of matches */
-static void parse_insn_match(char *match)
-{
-    if (!imatches) {
-        imatches = g_ptr_array_new();
-    }
-    g_ptr_array_add(imatches, match);
-}
+/* static void parse_insn_match(char *match) */
+/* { */
+/*     if (!imatches) { */
+/*         imatches = g_ptr_array_new(); */
+/*     } */
+/*     g_ptr_array_add(imatches, match); */
+/* } */
 
-static void parse_vaddr_match(char *match)
-{
-    uint64_t v = g_ascii_strtoull(match, NULL, 16);
-
-    if (!amatches) {
-        amatches = g_array_new(false, true, sizeof(uint64_t));
-    }
-    g_array_append_val(amatches, v);
-}
+/* static void parse_vaddr_match(char *match) */
+/* { */
+/*     uint64_t v = g_ascii_strtoull(match, NULL, 16); */
+/*  */
+/*     if (!amatches) { */
+/*         amatches = g_array_new(false, true, sizeof(uint64_t)); */
+/*     } */
+/*     g_array_append_val(amatches, v); */
+/* } */
 
 /**
  * Install the plugin
@@ -306,27 +306,27 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     /* } */
     assert(!info->system_emulation && "System emulation not supported");
 
-    for (int i = 0; i < argc; i++) {
-        char *opt = argv[i];
-        g_auto(GStrv) tokens = g_strsplit(opt, "=", 2);
-        if (g_strcmp0(tokens[0], "ifilter") == 0) {
-            parse_insn_match(tokens[1]);
-        } else if (g_strcmp0(tokens[0], "afilter") == 0) {
-            parse_vaddr_match(tokens[1]);
-        } else if (g_strcmp0(tokens[0], "rfile") == 0) {
-            rfile_name = g_strdup(tokens[1]);
-        } else if (g_strcmp0(tokens[0], "reg") == 0) {
-            reg_name = g_strdup(tokens[1]);
-        } else {
-            fprintf(stderr, "option parsing failed: %s\n", opt);
-            return -1;
-        }
-    }
+    /* for (int i = 0; i < argc; i++) { */
+    /*     char *opt = argv[i]; */
+    /*     g_auto(GStrv) tokens = g_strsplit(opt, "=", 2); */
+    /*     if (g_strcmp0(tokens[0], "ifilter") == 0) { */
+    /*         parse_insn_match(tokens[1]); */
+    /*     } else if (g_strcmp0(tokens[0], "afilter") == 0) { */
+    /*         parse_vaddr_match(tokens[1]); */
+    /*     } else if (g_strcmp0(tokens[0], "rfile") == 0) { */
+    /*         rfile_name = g_strdup(tokens[1]); */
+    /*     } else if (g_strcmp0(tokens[0], "reg") == 0) { */
+    /*         reg_name = g_strdup(tokens[1]); */
+    /*     } else { */
+    /*         fprintf(stderr, "option parsing failed: %s\n", opt); */
+    /*         return -1; */
+    /*     } */
+    /* } */
 
-    if ((!rfile_name) != (!reg_name)) {
-        fputs("file and reg need to be set at the same time\n", stderr);
-        return -1;
-    }
+    /* if ((!rfile_name) != (!reg_name)) { */
+    /*     fputs("file and reg need to be set at the same time\n", stderr); */
+    /*     return -1; */
+    /* } */
 
     /* Register translation block and exit callbacks */
     qemu_plugin_register_vcpu_init_cb(id, vcpu_init);
