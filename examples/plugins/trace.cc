@@ -91,6 +91,39 @@ static void trace_load(const uint64_t pc, const uint64_t effective_addr,
     }
 }
 
+static void
+trace_br(const uint8_t inst_type, const uint64_t pc, const uint8_t taken,
+         const uint64_t npc, const std::vector<uint64_t> &input_regs,
+         const std::vector<std::pair<uint8_t, uint64_t>> &output_regs) {
+    assert(inst_type == 3 || inst_type == 4 || inst_type == 5 ||
+           inst_type == 9 || inst_type == 0xa);
+    uint8_t num_input_regs = input_regs.size();
+    uint8_t num_output_regs = output_regs.size();
+    ctx.trace_out.write((char *)&pc, sizeof(pc));
+    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
+    ctx.trace_out.write((char *)&taken, sizeof(taken));
+    if (taken == 1) {
+        ctx.trace_out.write((char *)&npc, sizeof(npc));
+    }
+    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    for (int i = 0; i < num_input_regs; i++) {
+        assert(input_regs[i] < 256);
+        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+    }
+    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    for (int i = 0; i < num_output_regs; i++) {
+        const uint8_t rd = output_regs[i].first;
+        const uint64_t val = output_regs[i].second;
+        assert(rd < 0x7f);
+        ctx.trace_out.write((char *)&rd, sizeof(rd));
+        if (rd < 0x20) { // int reg
+            ctx.trace_out.write((char *)&val, 8);
+        } else { // fp reg
+            assert(false && "Not implemented: fp reg");
+        }
+    }
+}
+
 // static void write_store(FILE *trace, const uint64_t pc,
 //                         const uint64_t effective_addr,
 //                         const uint8_t access_size,
@@ -222,15 +255,33 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     const uint64_t alutype = (dec->inst >> 25) & 0x07f;
 
     if (const auto br = ctx.get_br()) {
-        const auto prev_pc = (*br)->pc;
-        const auto cur_pc = dec->pc;
-#if 0
-        if (prev_pc + 4 == cur_pc)
-            puts("condBranchInstClass(not taken)");
-        else {
-            printf("condBranchInstClass(taken, %lx -> %lx)\n", prev_pc, cur_pc);
+        const auto br_opcode = (*br)->inst & 0x7f;
+        const auto pc = (*br)->pc;
+        const auto npc = dec->pc;
+        const auto taken = pc + 4 != npc;
+        switch (br_opcode) {
+        case 0x63:
+            trace_br(3, pc, taken, npc, {}, {});
+            break;
+        case 0x6f:
+            if ((*br)->rd == /* ra = */ 0x01) {
+                trace_br(9, pc, 1, npc, {}, {});
+            } else if ((*br)->rd == 0x00) {
+                trace_br(4, pc, 1, npc, {}, {});
+            }
+            break;
+        case 0x67:
+            if ((*br)->rd == 0 && (*br)->rs1 == 1 && (*br)->imm == 0) {
+                trace_br(0xa, pc, 1, npc, {1}, {});
+            } else {
+                trace_br(5, pc, 1, npc, {(*br)->rs1},
+                         {{(*br)->rd, reg_val((*br)->rd)}});
+            }
+            break;
+        default:
+            assert(false && "Unknown br_opcode");
+            break;
         }
-#endif
         ctx.clear_br();
     }
 
@@ -317,16 +368,20 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         ctx.set_br(dec);
         break;
     case 0x6f:
-        if (dec->rd == /* ra = */ 0x01)
-            puts("jalClass(ra)");
-        else if (dec->rd == 0x00)
-            puts("uncondDirectBranchInstClass");
+        ctx.set_br(dec);
+        // if (dec->rd == /* ra = */ 0x01) {
+        //     puts("jalClass(ra)");
+        //     trace_br(9, dec->pc, 1, dec->pc + dec->imm, {}, {});
+        // } else if (dec->rd == 0x00) {
+        //     puts("uncondDirectBranchInstClass");
+        // }
         break;
     case 0x67:
-        if (dec->rd == 0 && dec->rs1 == 1 && dec->imm == 0 && dec->imm1 == 0)
-            puts("retClass");
-        else
-            puts("uncondIndirectBranchInstClass");
+        ctx.set_br(dec);
+        // if (dec->rd == 0 && dec->rs1 == 1 && dec->imm == 0 && dec->imm1 == 0)
+        //     puts("retClass");
+        // else
+        //     puts("uncondIndirectBranchInstClass");
         break;
     case 0x53:
         assert(false && "fpInstClass");
