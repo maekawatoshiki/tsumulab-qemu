@@ -9,30 +9,35 @@
 #include <string.h>
 #include <unistd.h>
 
-typedef struct CPU {
-    /* Store last executed instruction on each vCPU as a GString */
-    GString *last_exec;
-    GByteArray *reg_buf;
+#include <iostream>
+#include <optional>
 
-    int reg;
-} CPU;
-
-// static CPU *cpus;
-static int num_cpus = 1;
 static GRWLock expand_array_lock;
+
+class Ctx {
+  private:
+    std::optional<const rv_decode *> last_br;
+
+  public:
+    void clear_br() { last_br = std::nullopt; }
+    void set_br(const rv_decode *dec) { last_br = dec; }
+    std::optional<const rv_decode *> get_br() { return last_br; }
+};
+
+static Ctx ctx;
 
 /**
  * Add memory read or write information to current instruction log
  */
 static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t info,
                      uint64_t vaddr, void *udata) {
-    GString *s;
+    // GString *s;
 
     /* Find vCPU in array */
-    g_rw_lock_reader_lock(&expand_array_lock);
-    g_assert(cpu_index < num_cpus);
+    // g_rw_lock_reader_lock(&expand_array_lock);
+    // g_assert(cpu_index < num_cpus);
     // s = cpus[cpu_index].last_exec;
-    g_rw_lock_reader_unlock(&expand_array_lock);
+    // g_rw_lock_reader_unlock(&expand_array_lock);
 
     /* Indicate type of memory access */
     if (qemu_plugin_mem_is_store(info)) {
@@ -44,8 +49,8 @@ static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t info,
     /* If full system emulation log physical address and device name */
     struct qemu_plugin_hwaddr *hwaddr = qemu_plugin_get_hwaddr(info, vaddr);
     if (hwaddr) {
-        uint64_t addr = qemu_plugin_hwaddr_phys_addr(hwaddr);
-        const char *name = qemu_plugin_hwaddr_device_name(hwaddr);
+        // uint64_t addr = qemu_plugin_hwaddr_phys_addr(hwaddr);
+        // const char *name = qemu_plugin_hwaddr_device_name(hwaddr);
         // g_string_append_printf(s, ", 0x%08" PRIx64 ", %s", addr, name);
     } else {
         // g_string_append_printf(s, ", 0x%08" PRIx64, vaddr);
@@ -53,9 +58,6 @@ static void vcpu_mem(unsigned int cpu_index, qemu_plugin_meminfo_t info,
 }
 
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
-    int reg = 0;
-    bool found = false;
-
     assert(vcpu_index == 0 && "Only one vCPU supported");
 
     {
@@ -86,8 +88,16 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     const uint64_t alusize = (dec->inst >> 12) & 0x07;
     const uint64_t alutype = (dec->inst >> 25) & 0x07f;
 
-    CPU cpu;
-    int i;
+    if (const auto br = ctx.get_br()) {
+        const auto prev_pc = (*br)->pc;
+        const auto cur_pc = dec->pc;
+        if (prev_pc + 4 == cur_pc)
+            puts("condBranchInstClass(not taken)");
+        else {
+            printf("condBranchInstClass(taken, %lx -> %lx)\n", prev_pc, cur_pc);
+        }
+        ctx.clear_br();
+    }
 
     switch (opcode) {
     case 0x37:
@@ -136,7 +146,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
             puts("fpstoreInstClass(d)");
         break;
     case 0x63:
-        // assert(false && "branchInstClass");
+        ctx.set_br(dec);
         break;
     case 0x6f:
         if (dec->rd == /* ra = */ 0x01)
@@ -189,6 +199,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     }
     return;
 
+#if 0
     /* Find or create vCPU in array */
     g_rw_lock_reader_lock(&expand_array_lock);
     // cpu = cpus[cpu_index];
@@ -212,6 +223,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         g_string_append_printf(cpu.last_exec, " 0x%02X", cpu.reg_buf->data[i]);
     }
     g_byte_array_set_size(cpu.reg_buf, 0);
+#endif
 }
 
 /**
@@ -223,10 +235,10 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
     struct qemu_plugin_insn *insn;
 
-    size_t n = qemu_plugin_tb_n_insns(tb);
+    const size_t n = qemu_plugin_tb_n_insns(tb);
     for (size_t i = 0; i < n; i++) {
-        char *insn_disas;
-        uint64_t insn_vaddr;
+        // char *insn_disas;
+        // uint64_t insn_vaddr;
 
         /*
          * `insn` is shared between translations in QEMU, copy needed data here.
@@ -236,15 +248,15 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
          * a limitation for CISC architectures.
          */
         insn = qemu_plugin_tb_get_insn(tb, i);
-        insn_disas = qemu_plugin_insn_disas(insn);
+        // insn_disas = qemu_plugin_insn_disas(insn);
 
         rv_decode *dec = (rv_decode *)malloc(sizeof(rv_decode));
         qemu_plugin_insn_decode(insn, dec);
 
-        insn_vaddr = qemu_plugin_insn_vaddr(insn);
+        // insn_vaddr = qemu_plugin_insn_vaddr(insn);
 
-        uint32_t insn_opcode;
-        insn_opcode = *((uint32_t *)qemu_plugin_insn_data(insn));
+        // uint32_t insn_opcode;
+        // insn_opcode = *((uint32_t *)qemu_plugin_insn_data(insn));
         // char *output =
         //     g_strdup_printf("0x%" PRIx64 ", 0x%" PRIx32 ", \"%s\", (%x)",
         //                     insn_vaddr, insn_opcode, insn_disas, dec.op);
@@ -265,7 +277,10 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
 /**
  * On plugin exit, print last instruction in cache
  */
-static void plugin_exit(qemu_plugin_id_t id, void *p) { return; }
+static void plugin_exit(qemu_plugin_id_t id, void *p) {
+    assert(!ctx.get_br().has_value());
+    return;
+}
 
 extern "C" {
 
