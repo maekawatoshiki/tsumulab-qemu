@@ -12,14 +12,18 @@ PLUGIN ?= libbb.so
 fibo: #! Compile fibo.c
 	$(CC) -o fibo fibo.c
 
+format: #! Formats code
+	(cd `git rev-parse --show-toplevel` && git diff -U0 --no-color HEAD | clang-format-diff -i -p1)
+
 run: fibo #! Run fibo
 	../build/qemu-riscv32 fibo
 
 run_plugin: fibo #! Run fibo with plugin (e.g. make run_plugin PLUGIN=libinsn.so)
 	../build/qemu-riscv32 -d plugin -plugin ../build/tests/plugin/$(PLUGIN) fibo
 
-plugins: #! Build our plugins
+plugins: fibo #! Build our plugins
 	make -C ./plugins
+	../build/qemu-riscv32 -d plugin -plugin ./plugins/libexeclog.so fibo
 
 clean: #! Remove generated binaries
 	rm -f fibo

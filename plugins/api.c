@@ -239,6 +239,10 @@ char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn)
     return plugin_disas(cpu, insn->vaddr, insn->data->len);
 }
 
+char *qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn) {
+  assert(false && "Not implemented!");
+}
+
 const char *qemu_plugin_insn_symbol(const struct qemu_plugin_insn *insn)
 {
     const char *sym = lookup_symbol(insn->vaddr);

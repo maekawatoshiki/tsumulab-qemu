@@ -6,6 +6,7 @@
  * License: GNU GPL, version 2 or later.
  *   See the COPYING file in the top-level directory.
  */
+#include <assert.h>
 #include <glib.h>
 #include <inttypes.h>
 #include <stdio.h>
