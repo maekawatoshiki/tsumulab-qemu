@@ -6,7 +6,7 @@ NAMES := execlog
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
 CFLAGS := $(shell pkg-config --cflags glib-2.0)
-CFLAGS += -fPIC -Wall
+CFLAGS += -fPIC -Wall -O3
 CFLAGS += -I$(QEMU_SRC)/include/qemu
 
 all: $(SONAMES)

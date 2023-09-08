@@ -616,6 +616,8 @@ qemu_plugin_register_vcpu_syscall_ret_cb(qemu_plugin_id_t id,
 QEMU_PLUGIN_API
 char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn);
 
+char *qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn);
+
 /**
  * qemu_plugin_insn_symbol() - best effort symbol lookup
  * @insn: instruction reference
