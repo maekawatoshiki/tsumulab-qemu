@@ -1,13 +1,13 @@
+#include "../../disas/riscv.h"
+#include "../../include/qemu/qemu-plugin.h"
+
 #include <assert.h>
 #include <glib.h>
 #include <inttypes.h>
-#include <qemu-plugin.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include "disas/riscv.h"
 
 typedef struct CPU {
     /* Store last executed instruction on each vCPU as a GString */
@@ -17,7 +17,7 @@ typedef struct CPU {
     int reg;
 } CPU;
 
-static CPU *cpus;
+// static CPU *cpus;
 static int num_cpus = 1;
 static GRWLock expand_array_lock;
 
@@ -267,11 +267,13 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
  */
 static void plugin_exit(qemu_plugin_id_t id, void *p) { return; }
 
+extern "C" {
+
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
-extern "C" QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
-                                                      const qemu_info_t *info,
-                                                      int argc, char **argv) {
+QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
+                                           const qemu_info_t *info, int argc,
+                                           char **argv) {
     assert(!info->system_emulation && "System emulation not supported");
 
     // Register translation block and exit callbacks
@@ -281,3 +283,4 @@ extern "C" QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 
     return 0;
 }
+};
