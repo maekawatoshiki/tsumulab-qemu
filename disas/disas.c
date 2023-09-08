@@ -167,8 +167,10 @@ static void initialize_debug_host(CPUDebug *s)
 #elif defined(__riscv)
 #if defined(_ILP32) || (__riscv_xlen == 32)
     s->info.print_insn = print_insn_riscv32;
+    s->info.decode_insn = decode_insn_riscv32;
 #elif defined(_LP64)
     s->info.print_insn = print_insn_riscv64;
+    s->info.decode_insn = decode_insn_riscv64;
 #else
 #error unsupported RISC-V ABI
 #endif
@@ -274,6 +276,7 @@ char *plugin_disas(CPUState *cpu, uint64_t addr, size_t size)
     s.info.buffer_length = size;
     s.info.print_address_func = plugin_print_address;
 
+    assert(s.info.print_insn);
     if (s.info.cap_arch >= 0 && cap_disas_plugin(&s.info, addr, size)) {
         ; /* done */
     } else if (s.info.print_insn) {
@@ -284,6 +287,19 @@ char *plugin_disas(CPUState *cpu, uint64_t addr, size_t size)
 
     /* Return the buffer, freeing the GString container.  */
     return g_string_free(ds, false);
+}
+
+void plugin_decode(CPUState *cpu, uint64_t addr, size_t size, rv_decode *dec)
+{
+    CPUDebug s;
+
+    disas_initialize_debug_target(&s, cpu);
+    s.info.buffer_vma = addr;
+    s.info.buffer_length = size;
+    s.info.print_address_func = plugin_print_address;
+
+    assert(s.info.decode_insn);
+    s.info.decode_insn(addr, &s.info, dec);
 }
 
 /* Disassemble this for me please... (debugging). */

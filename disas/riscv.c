@@ -5002,6 +5002,58 @@ disasm_inst(char *buf, size_t buflen, rv_isa isa, uint64_t pc, rv_inst inst,
     format_inst(buf, buflen, 24, &dec);
 }
 
+static void decode_inst(rv_decode *dec, rv_isa isa, uint64_t pc, rv_inst inst, RISCVCPUConfig *cfg)
+{
+    dec->pc = pc;
+    dec->inst = inst;
+    dec->cfg = cfg;
+
+    static const struct
+    {
+        bool (*guard_func)(const RISCVCPUConfig *);
+        const rv_opcode_data *opcode_data;
+        void (*decode_func)(rv_decode *, rv_isa);
+    } decoders[] = {
+        {always_true_p, rvi_opcode_data, decode_inst_opcode},
+        {has_xtheadba_p, xthead_opcode_data, decode_xtheadba},
+        {has_xtheadbb_p, xthead_opcode_data, decode_xtheadbb},
+        {has_xtheadbs_p, xthead_opcode_data, decode_xtheadbs},
+        {has_xtheadcmo_p, xthead_opcode_data, decode_xtheadcmo},
+        {has_xtheadcondmov_p, xthead_opcode_data, decode_xtheadcondmov},
+        {has_xtheadfmemidx_p, xthead_opcode_data, decode_xtheadfmemidx},
+        {has_xtheadfmv_p, xthead_opcode_data, decode_xtheadfmv},
+        {has_xtheadmac_p, xthead_opcode_data, decode_xtheadmac},
+        {has_xtheadmemidx_p, xthead_opcode_data, decode_xtheadmemidx},
+        {has_xtheadmempair_p, xthead_opcode_data, decode_xtheadmempair},
+        {has_xtheadsync_p, xthead_opcode_data, decode_xtheadsync},
+        {has_XVentanaCondOps_p, ventana_opcode_data, decode_xventanacondops},
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(decoders); i++)
+    {
+        bool (*guard_func)(const RISCVCPUConfig *) = decoders[i].guard_func;
+        const rv_opcode_data *opcode_data = decoders[i].opcode_data;
+        void (*decode_func)(rv_decode *, rv_isa) = decoders[i].decode_func;
+
+        if (guard_func(cfg))
+        {
+            dec->opcode_data = opcode_data;
+            decode_func(dec, isa);
+            if (dec->op != rv_op_illegal)
+                break;
+        }
+    }
+
+    if (dec->op == rv_op_illegal)
+    {
+        dec->opcode_data = rvi_opcode_data;
+    }
+
+    decode_inst_operands(dec, isa);
+    decode_inst_decompress(dec, isa);
+    decode_inst_lift_pseudo(dec);
+}
+
 #define INST_FMT_2 "%04" PRIx64 "              "
 #define INST_FMT_4 "%08" PRIx64 "          "
 #define INST_FMT_6 "%012" PRIx64 "      "
@@ -5056,6 +5108,39 @@ print_insn_riscv(bfd_vma memaddr, struct disassemble_info *info, rv_isa isa)
     return len;
 }
 
+static int decode_insn_riscv(bfd_vma memaddr, struct disassemble_info *info, rv_isa isa, rv_decode *dec)
+{
+    bfd_byte packet[2];
+    rv_inst inst = 0;
+    size_t len = 2;
+    bfd_vma n;
+    int status;
+
+    /* Instructions are made of 2-byte packets in little-endian order */
+    for (n = 0; n < len; n += 2)
+    {
+        status = (*info->read_memory_func)(memaddr + n, packet, 2, info);
+        if (status != 0)
+        {
+            /* Don't fail just because we fell off the end.  */
+            if (n > 0)
+            {
+                break;
+            }
+            (*info->memory_error_func)(status, memaddr, info);
+            return status;
+        }
+        inst |= ((rv_inst)bfd_getl16(packet)) << (8 * n);
+        if (n == 0) {
+            len = inst_length(inst);
+        }
+    }
+
+    decode_inst(dec, isa, memaddr, inst, (RISCVCPUConfig *)info->target_info);
+
+    return len;
+}
+
 int print_insn_riscv32(bfd_vma memaddr, struct disassemble_info *info)
 {
     return print_insn_riscv(memaddr, info, rv32);
@@ -5069,4 +5154,19 @@ int print_insn_riscv64(bfd_vma memaddr, struct disassemble_info *info)
 int print_insn_riscv128(bfd_vma memaddr, struct disassemble_info *info)
 {
     return print_insn_riscv(memaddr, info, rv128);
+}
+
+int decode_insn_riscv32(bfd_vma memaddr, struct disassemble_info *info, rv_decode *dec)
+{
+    return decode_insn_riscv(memaddr, info, rv32, dec);
+}
+
+int decode_insn_riscv64(bfd_vma memaddr, struct disassemble_info *info, rv_decode *dec)
+{
+    return decode_insn_riscv(memaddr, info, rv64, dec);
+}
+
+int decode_insn_riscv128(bfd_vma memaddr, struct disassemble_info *info, rv_decode *dec)
+{
+    return decode_insn_riscv(memaddr, info, rv128, dec);
 }

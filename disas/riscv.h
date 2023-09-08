@@ -186,7 +186,8 @@ typedef struct {
     const short decomp_data;
 } rv_opcode_data;
 
-typedef struct {
+typedef struct rv_decode
+{
     RISCVCPUConfig *cfg;
     uint64_t  pc;
     uint64_t  inst;

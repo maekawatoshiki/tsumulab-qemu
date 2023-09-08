@@ -922,12 +922,15 @@ static void riscv_cpu_disas_set_info(CPUState *s, disassemble_info *info)
     switch (env->xl) {
     case MXL_RV32:
         info->print_insn = print_insn_riscv32;
+        info->decode_insn = decode_insn_riscv32;
         break;
     case MXL_RV64:
         info->print_insn = print_insn_riscv64;
+        info->decode_insn = decode_insn_riscv64;
         break;
     case MXL_RV128:
         info->print_insn = print_insn_riscv128;
+        info->decode_insn = decode_insn_riscv128;
         break;
     default:
         g_assert_not_reached();

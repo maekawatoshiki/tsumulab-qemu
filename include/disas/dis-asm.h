@@ -18,6 +18,8 @@ typedef uint8_t bfd_byte;
 #define sprintf_vma(s,x) sprintf (s, "%0" PRIx64, x)
 #define snprintf_vma(s,ss,x) snprintf (s, ss, "%0" PRIx64, x)
 
+struct rv_decode;
+
 #define BFD64
 
 enum bfd_flavour {
@@ -348,6 +350,8 @@ typedef struct disassemble_info {
      */
     int (*print_insn)(bfd_vma addr, struct disassemble_info *info);
 
+    int (*decode_insn)(bfd_vma addr, struct disassemble_info *info, struct rv_decode *);
+
   /* Function called to determine if there is a symbol at the given ADDR.
      If there is, the function returns 1, otherwise it returns 0.
      This is used by ports which support an overlay manager where
@@ -456,6 +460,10 @@ int print_insn_riscv128         (bfd_vma, disassemble_info*);
 int print_insn_rx(bfd_vma, disassemble_info *);
 int print_insn_hexagon(bfd_vma, disassemble_info *);
 int print_insn_loongarch(bfd_vma, disassemble_info *);
+
+int decode_insn_riscv32(bfd_vma, disassemble_info *, struct rv_decode *);
+int decode_insn_riscv64(bfd_vma, disassemble_info *, struct rv_decode *);
+int decode_insn_riscv128(bfd_vma, disassemble_info *, struct rv_decode *);
 
 #ifdef CONFIG_CAPSTONE
 bool cap_disas_target(disassemble_info *info, uint64_t pc, size_t size);

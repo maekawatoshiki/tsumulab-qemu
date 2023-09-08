@@ -239,8 +239,10 @@ char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn)
     return plugin_disas(cpu, insn->vaddr, insn->data->len);
 }
 
-char *qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn) {
-  assert(false && "Not implemented!");
+void qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn, rv_decode *dec)
+{
+    CPUState *cpu = current_cpu;
+    plugin_decode(cpu, insn->vaddr, insn->data->len, dec);
 }
 
 const char *qemu_plugin_insn_symbol(const struct qemu_plugin_insn *insn)
