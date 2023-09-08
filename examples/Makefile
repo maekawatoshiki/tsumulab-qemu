@@ -25,6 +25,10 @@ plugins: fibo #! Build our plugins
 	make -C ./plugins
 	../build/qemu-riscv32 -d plugin -plugin ./plugins/libexeclog.so fibo
 
+trace: fibo #! Run fibo with trace generation enabled
+	make -C ./plugins
+	../build/qemu-riscv32 -d plugin -plugin ./plugins/libtrace.so fibo
+
 clean: #! Remove generated binaries
 	rm -f fibo
 	make clean -C ./plugins
