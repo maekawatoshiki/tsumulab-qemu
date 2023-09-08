@@ -240,6 +240,8 @@ typedef struct {
     size_t offset;
 } qemu_plugin_u64;
 
+struct rv_decode;
+
 /**
  * enum qemu_plugin_cb_flags - type of callback
  *
@@ -616,7 +618,7 @@ qemu_plugin_register_vcpu_syscall_ret_cb(qemu_plugin_id_t id,
 QEMU_PLUGIN_API
 char *qemu_plugin_insn_disas(const struct qemu_plugin_insn *insn);
 
-char *qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn);
+void qemu_plugin_insn_decode(const struct qemu_plugin_insn *insn, struct rv_decode *dec);
 
 /**
  * qemu_plugin_insn_symbol() - best effort symbol lookup

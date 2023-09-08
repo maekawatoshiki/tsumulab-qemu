@@ -13,7 +13,7 @@ fibo: #! Compile fibo.c
 	$(CC) -o fibo fibo.c
 
 format: #! Formats code
-	(cd `git rev-parse --show-toplevel` && git diff -U0 --no-color HEAD | clang-format-diff -i -p1)
+	(cd `git rev-parse --show-toplevel` && git diff -U0 --no-color HEAD ./examples | clang-format-diff -style "{BasedOnStyle: LLVM, IndentWidth: 4}" -i -p1)
 
 run: fibo #! Run fibo
 	../build/qemu-riscv32 fibo

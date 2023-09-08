@@ -1,6 +1,8 @@
 #ifndef QEMU_DISAS_H
 #define QEMU_DISAS_H
 
+#include "disas/riscv.h"
+
 /* Disassemble this for me please... (debugging). */
 void disas(FILE *out, const void *code, size_t size);
 void target_disas(FILE *out, CPUState *cpu, uint64_t code, size_t size);
@@ -9,6 +11,8 @@ void monitor_disas(Monitor *mon, CPUState *cpu, uint64_t pc,
                    int nb_insn, bool is_physical);
 
 char *plugin_disas(CPUState *cpu, uint64_t addr, size_t size);
+
+void plugin_decode(CPUState *cpu, uint64_t addr, size_t size, rv_decode *dec);
 
 /* Look up symbol for debugging purpose.  Returns "" if unknown. */
 const char *lookup_symbol(uint64_t orig_addr);
