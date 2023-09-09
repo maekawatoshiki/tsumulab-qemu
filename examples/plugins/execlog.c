@@ -102,7 +102,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata)
     g_rw_lock_reader_lock(&expand_array_lock);
     cpu = cpus[cpu_index];
     g_rw_lock_reader_unlock(&expand_array_lock);
-    int n = qemu_plugin_read_register(cpu.reg_buf, cpu.reg);
+    /* int n = qemu_plugin_read_register(cpu.reg_buf, cpu.reg); */
     /* return; */
 
     /* Print previous instruction in cache */
