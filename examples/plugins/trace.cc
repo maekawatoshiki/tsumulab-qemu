@@ -152,24 +152,26 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
         int num_reg_files;
         const qemu_plugin_register_file_t *reg_files =
             qemu_plugin_get_register_files(vcpu_index, &num_reg_files);
-        /* org.gnu.gdb.riscv.cpu */
-        /* org.gnu.gdb.riscv.fpu */
-        /* org.gnu.gdb.riscv.virtual */
-        /* org.gnu.gdb.riscv.csr */
+        // org.gnu.gdb.riscv.cpu
+        // org.gnu.gdb.riscv.fpu
+        // org.gnu.gdb.riscv.virtual
+        // org.gnu.gdb.riscv.csr
         for (int i = 0; i < num_reg_files; i++) {
             const qemu_plugin_register_file_t *reg_file = &reg_files[i];
-            printf("\033[1;32m%s\033[0m\n", reg_file->name);
+            printf("\033[1;32m%s\033[0m (%d registers)\n", reg_file->name,
+                   reg_file->num_regs);
+#if 0
             for (int k = 0; k < reg_file->num_regs; k++) {
                 printf("%d: %s\n", k, reg_file->regs[k]);
             }
-            break;
+#endif
         }
     }
 }
 
 static int32_t reg_val(const uint8_t reg) {
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
-    assert(n == 4 && ctx.reg_buf->len == 4);
+    assert(n == 4 && "RV32 support only for now");
     const auto ret = *((int32_t *)ctx.reg_buf->data);
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
@@ -186,10 +188,6 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     const uint64_t alusize = (insn->inst >> 12) & 0x07;
     const uint64_t alutype = (insn->inst >> 25) & 0x7f;
 
-#define puts(_)                                                                \
-    do {                                                                       \
-    } while (0)
-
     assert((insn->codec != rv_codec_r2_immhl &&
             insn->codec != rv_codec_r2_imm2_imm5) &&
            "insn->imm1 must be zero");
@@ -197,86 +195,80 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     switch (opcode) {
     case 0x37:
     case 0x17: {
-        puts("aluInstClass(lui, auipc)");
+        // aluInstClass(lui, auipc)
         trace_alu(0, insn->pc, {}, insn->rd, reg_val(insn->rd));
         break;
     }
-    case 0x13: {
-        puts("aluInstClass(alu(immediate))");
+    case 0x13: // aluInstClass(alu(immediate))
         trace_alu(0, insn->pc, {insn->rs1}, insn->rd, reg_val(insn->rd));
         break;
-    }
     case 0x33:
         if (alutype == 0x00 || alutype == 0x20) {
-            puts("aluInstClass(alu)");
+            // aluInstClass(alu)
             trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
                       reg_val(insn->rd));
         } else if (alutype == 0x01) {
-            puts("slowAluInstClass");
+            // slowAluInstClass
             trace_alu(7, insn->pc, {insn->rs1, insn->rs1}, insn->rd,
                       reg_val(insn->rd));
         }
         break;
-    case 0x03:
+    case 0x03: {
+        const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
         if (alusize == 0x00 || alusize == 0x04) {
-            puts("loadInstClass(b,ub)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // loadInstClass(b,ub)
             trace_load(insn->pc, effaddr, 1, {insn->rs1}, insn->rd,
                        reg_val(insn->rd));
         } else if (alusize == 0x01 || alusize == 0x05) {
-            puts("loadInstClass(h,uh)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // loadInstClass(h,uh)
             trace_load(insn->pc, effaddr, 2, {insn->rs1}, insn->rd,
                        reg_val(insn->rd));
         } else if (alusize == 0x02) {
-            puts("loadInstClass(w)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // loadInstClass(w)
             trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
                        reg_val(insn->rd));
         } else if (alusize == 0x03) {
-            puts("loadInstClass(d)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // loadInstClass(d)
             trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
                        reg_val(insn->rd));
         }
         break;
-    case 0x07:
+    }
+    case 0x07: {
+        const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
         if (alusize == 0x02) {
-            puts("fploadInstClass(w)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // fploadInstClass(w)
             trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
                        reg_val(insn->rd));
         } else if (alusize == 0x03) {
-            puts("fploadInstClass(d)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // fploadInstClass(d)
             trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
                        reg_val(insn->rd));
         }
         break;
-    case 0x23:
+    }
+    case 0x23: {
+        const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
         if (alusize == 0x00 || alusize == 0x04) {
-            puts("storeInstClass(b,ub)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // storeInstClass(b,ub)
             trace_store(insn->pc, effaddr, 1, {insn->rs1, insn->rs2});
         } else if (alusize == 0x01 || alusize == 0x05) {
-            puts("storeInstClass(h,uh)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // storeInstClass(h,uh)
             trace_store(insn->pc, effaddr, 2, {insn->rs1, insn->rs2});
         } else if (alusize == 0x02) {
-            puts("storeInstClass(w)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // storeInstClass(w)
             trace_store(insn->pc, effaddr, 4, {insn->rs1, insn->rs2});
         } else if (alusize == 0x03) {
-            puts("storeInstClass(d)");
-            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            // storeInstClass(d)
             trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2});
         }
         break;
+    }
     case 0x27:
         if (alusize == 0x02)
-            puts("fpstoreInstClass(w)");
+            ; // fpstoreInstClass(w)
         else if (alusize == 0x03)
-            puts("fpstoreInstClass(d)");
+            ; // fpstoreInstClass(d)
         assert(false);
         break;
     case 0x63: {
@@ -300,10 +292,10 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         const auto pc = insn->pc;
         const auto npc = next_insn->pc;
         if (insn->rd == 0 && insn->rs1 == 1 && insn->imm == 0) {
-            puts("retClass");
+            // retClass
             trace_br(0xa, pc, true, npc, {1}, {});
         } else {
-            puts("uncondIndirectBranchInstClass");
+            // uncondIndirectBranchInstClass
             trace_br(5, pc, true, npc, {insn->rs1},
                      {{insn->rd, reg_val(insn->rd)}});
         }
@@ -313,13 +305,13 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         assert(false && "fpInstClass");
         // if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
         //     alutype == 0x21)
-        //     puts("fpInstClass(rs1:f,rd:f)");
+        //     // fpInstClass(rs1:f,rd:f)
         // else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
         //          alutype == 0x71)
-        //     puts("fpInstClass(rs1:f,rd:x)");
+        //     // fpInstClass(rs1:f,rd:x)
         // else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
         //          alutype == 0x21)
-        //     puts("fpInstClass(rs1:x,rd:f)");
+        //     // fpInstClass(rs1:x,rd:f)
         // else if (alutype <= 0x3f)
         //     puts("fpInstClass(rs1:x,rd
         break;
@@ -327,30 +319,29 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     case 0x47:
     case 0x4b:
     case 0x4f:
-        puts("fpInstClass(rs1:f,rs2:f,rs3:f,rd:f");
+        // fpInstClass(rs1:f,rs2:f,rs3:f,rd:f
         assert(false);
         break;
     case 0x73:
         if (insn->inst == 0x10200073) {
-            puts("sretInstClass");
+            // sretInstClass
             assert(false);
         } else if (alusize == 0) {
-            puts("slowAluInstClass"); // fence ecall/break
+            // slowAluInstClass // fence ecall/break
             trace_simple(7, insn->pc);
         } else if (alusize >= 1) {
-            puts("csrInstClass");
+            // csrInstClass
             assert(false);
         }
         break;
     case 0x0f:
-        puts("slowAluInstClass");
+        // slowAluInstClass
         assert(false);
         break;
     default:
         assert(false && "Unknown opcode");
         break;
     }
-#undef puts
 }
 
 /**
