@@ -5,6 +5,7 @@ SHELL := /bin/bash
 
 CC := $(or $(RISCV),$(HOME)/riscv/bin/riscv32-unknown-elf-gcc)
 PLUGIN ?= libbb.so
+TRACE_TARGET ?= fibo
 
 # All targets are phony
 .PHONY: $(shell egrep -o ^[a-zA-Z0-9_-]+: $(MAKEFILE_LIST) | sed 's/://')
@@ -25,9 +26,9 @@ plugins: fibo #! Build our plugins
 	make -C ./plugins
 	../build/qemu-riscv32 -d plugin -plugin ./plugins/libexeclog.so fibo
 
-trace: fibo #! Run fibo with trace generation enabled
+trace: #! Generate trace for $TRACE_TARGET
 	make libtrace.so -C ./plugins
-	../build/qemu-riscv32 -d plugin -plugin ./plugins/libtrace.so fibo
+	../build/qemu-riscv32 -d plugin -plugin ./plugins/libtrace.so $(TRACE_TARGET)
 
 clean: #! Remove generated binaries
 	rm -f fibo
