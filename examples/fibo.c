@@ -7,7 +7,7 @@ int fibo(int x) {
 }
 
 int main() {
-    print(fibo(30));
+    print(fibo(20));
     return 0;
 }
 

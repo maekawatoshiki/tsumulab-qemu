@@ -16,9 +16,6 @@
 #include <vector>
 
 class Ctx {
-  private:
-    std::optional<std::tuple<const rv_decode *, const uint64_t>> pending_br;
-
   public:
     Ctx() {
         this->trace_out.open("trace.out", std::ios::binary | std::ios::out);
@@ -33,14 +30,7 @@ class Ctx {
 
     std::ofstream trace_out;
     GByteArray *reg_buf;
-
-    void clear_br() { this->pending_br = std::nullopt; }
-    void set_br(const rv_decode *dec, const uint64_t rd_val) {
-        this->pending_br.emplace(dec, rd_val);
-    }
-    std::optional<std::tuple<const rv_decode *, const uint64_t>> get_br() {
-        return this->pending_br;
-    }
+    std::optional<const rv_decode *> pending_insn = std::nullopt;
 };
 
 static Ctx ctx;
@@ -177,133 +167,109 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     }
 }
 
-static uint32_t reg_val(const uint8_t reg) {
+static int32_t reg_val(const uint8_t reg) {
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
     assert(n == 4 && ctx.reg_buf->len == 4);
-    const auto ret = *((uint32_t *)ctx.reg_buf->data);
+    const auto ret = *((int32_t *)ctx.reg_buf->data);
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
 }
 
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
-    const rv_decode *dec = (rv_decode *)udata;
-    const uint64_t opcode = dec->inst & 0x7f;
-    const uint64_t alusize = (dec->inst >> 12) & 0x07;
-    const uint64_t alutype = (dec->inst >> 25) & 0x7f;
+    const rv_decode *insn = ctx.pending_insn.value_or(nullptr);
+    const rv_decode *next_insn = (rv_decode *)udata;
+    ctx.pending_insn = next_insn;
+    if (insn == nullptr)
+        return;
 
-    if (const auto br_rd = ctx.get_br()) {
-        const auto [br, rd_val] = *br_rd;
-        const auto br_opcode = br->inst & 0x7f;
-        const auto pc = br->pc;
-        const auto npc = dec->pc;
-        const auto taken = pc + 4 != npc;
-        switch (br_opcode) {
-        case 0x63: // beq, bne, blt, bge, bltu, bgeu
-            trace_br(3, pc, taken, npc, {}, {});
-            break;
-        case 0x6f: // jal
-            if (br->rd == /* ra = */ 0x01) {
-                trace_br(9, pc, true, npc, {}, {{1, rd_val}});
-            } else if (br->rd == 0x00) {
-                trace_br(4, pc, true, npc, {}, {});
-            }
-            break;
-        case 0x67: // jalr
-            if (br->rd == 0 && br->rs1 == 1 && br->imm == 0) {
-                trace_br(0xa, pc, true, npc, {1}, {});
-            } else {
-                trace_br(5, pc, true, npc, {br->rs1}, {{br->rd, rd_val}});
-            }
-            break;
-        default:
-            assert(false && "Unknown br_opcode");
-            break;
-        }
-        ctx.clear_br();
-    }
+    const uint64_t opcode = insn->inst & 0x7f;
+    const uint64_t alusize = (insn->inst >> 12) & 0x07;
+    const uint64_t alutype = (insn->inst >> 25) & 0x7f;
 
 #define puts(_)                                                                \
     do {                                                                       \
     } while (0)
 
-    assert((dec->codec != rv_codec_r2_immhl && dec->codec != rv_codec_r2_imm2_imm5) && "dec->imm1 must be zero");
+    assert((insn->codec != rv_codec_r2_immhl &&
+            insn->codec != rv_codec_r2_imm2_imm5) &&
+           "insn->imm1 must be zero");
 
     switch (opcode) {
     case 0x37:
     case 0x17: {
         puts("aluInstClass(lui, auipc)");
-        trace_alu(0, dec->pc, {}, dec->rd, reg_val(dec->rd));
+        trace_alu(0, insn->pc, {}, insn->rd, reg_val(insn->rd));
         break;
     }
     case 0x13: {
         puts("aluInstClass(alu(immediate))");
-        trace_alu(0, dec->pc, {dec->rs1}, dec->rd, reg_val(dec->rd));
+        trace_alu(0, insn->pc, {insn->rs1}, insn->rd, reg_val(insn->rd));
         break;
     }
     case 0x33:
         if (alutype == 0x00 || alutype == 0x20) {
             puts("aluInstClass(alu)");
-            trace_alu(0, dec->pc, {dec->rs1, dec->rs2}, dec->rd,
-                      reg_val(dec->rd));
+            trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                      reg_val(insn->rd));
         } else if (alutype == 0x01) {
             puts("slowAluInstClass");
-            trace_alu(7, dec->pc, {dec->rs1, dec->rs1}, dec->rd,
-                      reg_val(dec->rd));
+            trace_alu(7, insn->pc, {insn->rs1, insn->rs1}, insn->rd,
+                      reg_val(insn->rd));
         }
         break;
     case 0x03:
         if (alusize == 0x00 || alusize == 0x04) {
             puts("loadInstClass(b,ub)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_load(dec->pc, effaddr, 1, {dec->rs1}, dec->rd,
-                       reg_val(dec->rd));
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_load(insn->pc, effaddr, 1, {insn->rs1}, insn->rd,
+                       reg_val(insn->rd));
         } else if (alusize == 0x01 || alusize == 0x05) {
             puts("loadInstClass(h,uh)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_load(dec->pc, effaddr, 2, {dec->rs1}, dec->rd,
-                       reg_val(dec->rd));
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_load(insn->pc, effaddr, 2, {insn->rs1}, insn->rd,
+                       reg_val(insn->rd));
         } else if (alusize == 0x02) {
             puts("loadInstClass(w)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_load(dec->pc, effaddr, 4, {dec->rs1}, dec->rd,
-                       reg_val(dec->rd));
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
+                       reg_val(insn->rd));
         } else if (alusize == 0x03) {
             puts("loadInstClass(d)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_load(dec->pc, effaddr, 8, {dec->rs1}, dec->rd,
-                       reg_val(dec->rd));
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
+                       reg_val(insn->rd));
         }
         break;
     case 0x07:
         if (alusize == 0x02) {
             puts("fploadInstClass(w)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_load(dec->pc, effaddr, 4, {dec->rs1}, dec->rd,
-                       reg_val(dec->rd));
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
+                       reg_val(insn->rd));
         } else if (alusize == 0x03) {
             puts("fploadInstClass(d)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_load(dec->pc, effaddr, 8, {dec->rs1}, dec->rd,
-                       reg_val(dec->rd));
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
+                       reg_val(insn->rd));
         }
         break;
     case 0x23:
         if (alusize == 0x00 || alusize == 0x04) {
             puts("storeInstClass(b,ub)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_store(dec->pc, effaddr, 1, {dec->rs1, dec->rs2});
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_store(insn->pc, effaddr, 1, {insn->rs1, insn->rs2});
         } else if (alusize == 0x01 || alusize == 0x05) {
             puts("storeInstClass(h,uh)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_store(dec->pc, effaddr, 2, {dec->rs1, dec->rs2});
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_store(insn->pc, effaddr, 2, {insn->rs1, insn->rs2});
         } else if (alusize == 0x02) {
             puts("storeInstClass(w)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_store(dec->pc, effaddr, 4, {dec->rs1, dec->rs2});
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_store(insn->pc, effaddr, 4, {insn->rs1, insn->rs2});
         } else if (alusize == 0x03) {
             puts("storeInstClass(d)");
-            const uint64_t effaddr = reg_val(dec->rs1) + dec->imm;
-            trace_store(dec->pc, effaddr, 8, {dec->rs1, dec->rs2});
+            const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2});
         }
         break;
     case 0x27:
@@ -313,19 +279,36 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
             puts("fpstoreInstClass(d)");
         assert(false);
         break;
-    case 0x63:
-        ctx.set_br(dec, reg_val(dec->rd));
+    case 0x63: {
+        const auto pc = insn->pc;
+        const auto npc = next_insn->pc;
+        const auto taken = pc + 4 != npc;
+        trace_br(3, pc, taken, npc, {}, {});
         break;
-    case 0x6f:
-        ctx.set_br(dec, reg_val(dec->rd));
+    }
+    case 0x6f: {
+        const auto pc = insn->pc;
+        const auto npc = next_insn->pc;
+        if (insn->rd == /* ra = */ 0x01) {
+            trace_br(9, pc, true, npc, {}, {{1, reg_val(1)}});
+        } else if (insn->rd == 0x00) {
+            trace_br(4, pc, true, npc, {}, {});
+        }
         break;
-    case 0x67:
-        ctx.set_br(dec, reg_val(dec->rd));
-        // if (dec->rd == 0 && dec->rs1 == 1 && dec->imm == 0 && dec->imm1 == 0)
-        //     puts("retClass");
-        // else
-        //     puts("uncondIndirectBranchInstClass");
+    }
+    case 0x67: {
+        const auto pc = insn->pc;
+        const auto npc = next_insn->pc;
+        if (insn->rd == 0 && insn->rs1 == 1 && insn->imm == 0) {
+            puts("retClass");
+            trace_br(0xa, pc, true, npc, {1}, {});
+        } else {
+            puts("uncondIndirectBranchInstClass");
+            trace_br(5, pc, true, npc, {insn->rs1},
+                     {{insn->rd, reg_val(insn->rd)}});
+        }
         break;
+    }
     case 0x53:
         assert(false && "fpInstClass");
         // if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
@@ -348,12 +331,12 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         assert(false);
         break;
     case 0x73:
-        if (dec->inst == 0x10200073) {
+        if (insn->inst == 0x10200073) {
             puts("sretInstClass");
             assert(false);
         } else if (alusize == 0) {
             puts("slowAluInstClass"); // fence ecall/break
-            trace_simple(7, dec->pc);
+            trace_simple(7, insn->pc);
         } else if (alusize >= 1) {
             puts("csrInstClass");
             assert(false);
@@ -368,32 +351,6 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         break;
     }
 #undef puts
-
-#if 0
-    /* Find or create vCPU in array */
-    g_rw_lock_reader_lock(&expand_array_lock);
-    // cpu = cpus[cpu_index];
-    g_rw_lock_reader_unlock(&expand_array_lock);
-    int n = qemu_plugin_read_register(cpu.reg_buf, cpu.reg);
-
-    /* Print previous instruction in cache */
-    if (cpu.last_exec->len) {
-        // qemu_plugin_outs(cpu.last_exec->str);
-        // qemu_plugin_outs("\n");
-    }
-
-    /* Store new instruction in cache */
-    /* vcpu_mem will add memory access information to last_exec */
-    g_string_printf(cpu.last_exec, "%u, ", cpu_index);
-    g_string_append(cpu.last_exec, (char *)udata);
-
-    g_string_append(cpu.last_exec, ", reg,");
-    n = qemu_plugin_read_register(cpu.reg_buf, cpu.reg);
-    for (i = 0; i < n; i++) {
-        g_string_append_printf(cpu.last_exec, " 0x%02X", cpu.reg_buf->data[i]);
-    }
-    g_byte_array_set_size(cpu.reg_buf, 0);
-#endif
 }
 
 /**
@@ -430,7 +387,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
  * On plugin exit, print last instruction in cache
  */
 static void plugin_exit(qemu_plugin_id_t id, void *p) {
-    assert(!ctx.get_br().has_value());
     ctx.trace_out.flush();
     ctx.trace_out.close();
     return;
