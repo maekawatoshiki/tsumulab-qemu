@@ -45,16 +45,18 @@ static void trace_alu(const uint8_t inst_type, const uint64_t pc,
     ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
     ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
     for (int i = 0; i < num_input_regs; i++) {
-        assert(input_regs[i] < 256);
+        assert(input_regs[i] < 0x40);
         ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
     }
     ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
-    assert(rd < 32);
+    assert(rd < 0x40);
     ctx.trace_out.write((char *)&rd, sizeof(rd));
     if (rd < 0x20) { // int reg
         ctx.trace_out.write((char *)&val, 8);
     } else { // fp reg
-        assert(false && "Not implemented: fp reg");
+        ctx.trace_out.write((char *)&val, 8);
+        uint64_t zero = 0;
+        ctx.trace_out.write((char *)&zero, 8);
     }
 }
 
@@ -71,16 +73,18 @@ static void trace_load(const uint64_t pc, uint64_t effective_addr,
     ctx.trace_out.write((char *)&access_size, sizeof(access_size));
     ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
     for (int i = 0; i < num_input_regs; i++) {
-        assert(input_regs[i] < 256);
+        assert(input_regs[i] < 0x40);
         ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
     }
     ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
-    assert(rd < 32);
+    assert(rd < 0x40);
     ctx.trace_out.write((char *)&rd, sizeof(rd));
     if (rd < 0x20) { // int reg
         ctx.trace_out.write((char *)&val, 8);
     } else { // fp reg
-        assert(false && "Not implemented: fp reg");
+        ctx.trace_out.write((char *)&val, 8);
+        uint64_t zero = 0;
+        ctx.trace_out.write((char *)&zero, 8);
     }
 }
 
@@ -100,14 +104,14 @@ trace_br(const uint8_t inst_type, const uint64_t pc, const uint8_t taken,
     }
     ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
     for (int i = 0; i < num_input_regs; i++) {
-        assert(input_regs[i] < 256);
+        assert(input_regs[i] < 0x40);
         ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
     }
     ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
     for (int i = 0; i < num_output_regs; i++) {
         const uint8_t rd = output_regs[i].first;
         const uint64_t val = output_regs[i].second;
-        assert(rd < 32);
+        assert(rd < 0x40);
         ctx.trace_out.write((char *)&rd, sizeof(rd));
         if (rd < 0x20) { // int reg
             ctx.trace_out.write((char *)&val, 8);
@@ -129,7 +133,7 @@ static void trace_store(const uint64_t pc, uint64_t effective_addr,
     ctx.trace_out.write((char *)&access_size, sizeof(access_size));
     ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
     for (int i = 0; i < num_input_regs; i++) {
-        assert(input_regs[i] < 32);
+        assert(input_regs[i] < 0x40);
         ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
     }
     ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
@@ -156,23 +160,46 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
         // org.gnu.gdb.riscv.fpu
         // org.gnu.gdb.riscv.virtual
         // org.gnu.gdb.riscv.csr
+        // int idx = 0;
         for (int i = 0; i < num_reg_files; i++) {
             const qemu_plugin_register_file_t *reg_file = &reg_files[i];
             printf("\033[1;32m%s\033[0m (%d registers)\n", reg_file->name,
                    reg_file->num_regs);
 #if 0
             for (int k = 0; k < reg_file->num_regs; k++) {
-                printf("%d: %s\n", k, reg_file->regs[k]);
+                printf("%d (%d): %s\n", k, idx, reg_file->regs[k]);
+                idx += 1;
             }
 #endif
         }
     }
 }
 
-static int32_t reg_val(const uint8_t reg) {
+static int32_t xpr_val(const uint8_t reg) {
+    assert(reg < 0x20);
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
     assert(n == 4 && "RV32 support only for now");
     const auto ret = *((int32_t *)ctx.reg_buf->data);
+    g_byte_array_set_size(ctx.reg_buf, 0);
+    return ret;
+}
+
+static uint64_t fpr_val(const uint8_t reg) {
+    assert(reg < 0x20);
+    const int n =
+        qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + /* pc = */ 1);
+    uint64_t ret;
+    switch (n) {
+    case 4:
+        ret = *((uint32_t *)ctx.reg_buf->data);
+        break;
+    case 8:
+        ret = *((uint64_t *)ctx.reg_buf->data);
+        break;
+    default:
+        fprintf(stderr, "\033[1;31mRead bytes: %d\033[0m\n", n);
+        assert(false && "FPR must 32 or 64 bits");
+    }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
 }
@@ -196,59 +223,59 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     case 0x37:
     case 0x17: {
         // aluInstClass(lui, auipc)
-        trace_alu(0, insn->pc, {}, insn->rd, reg_val(insn->rd));
+        trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
         break;
     }
     case 0x13: // aluInstClass(alu(immediate))
-        trace_alu(0, insn->pc, {insn->rs1}, insn->rd, reg_val(insn->rd));
+        trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
         break;
     case 0x33:
         if (alutype == 0x00 || alutype == 0x20) {
             // aluInstClass(alu)
             trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
-                      reg_val(insn->rd));
+                      xpr_val(insn->rd));
         } else if (alutype == 0x01) {
             // slowAluInstClass
             trace_alu(7, insn->pc, {insn->rs1, insn->rs1}, insn->rd,
-                      reg_val(insn->rd));
+                      xpr_val(insn->rd));
         }
         break;
     case 0x03: {
-        const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x00 || alusize == 0x04) {
             // loadInstClass(b,ub)
             trace_load(insn->pc, effaddr, 1, {insn->rs1}, insn->rd,
-                       reg_val(insn->rd));
+                       xpr_val(insn->rd));
         } else if (alusize == 0x01 || alusize == 0x05) {
             // loadInstClass(h,uh)
             trace_load(insn->pc, effaddr, 2, {insn->rs1}, insn->rd,
-                       reg_val(insn->rd));
+                       xpr_val(insn->rd));
         } else if (alusize == 0x02) {
             // loadInstClass(w)
             trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
-                       reg_val(insn->rd));
+                       xpr_val(insn->rd));
         } else if (alusize == 0x03) {
             // loadInstClass(d)
             trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
-                       reg_val(insn->rd));
+                       xpr_val(insn->rd));
         }
         break;
     }
     case 0x07: {
-        const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x02) {
-            // fploadInstClass(w)
-            trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
-                       reg_val(insn->rd));
+            // fpload(rs1:x,rd:f,w)
+            trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd + 0x20u,
+                       fpr_val(insn->rd));
         } else if (alusize == 0x03) {
-            // fploadInstClass(d)
-            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
-                       reg_val(insn->rd));
+            // fpload(rs1:x,rd:f,d)
+            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd + 0x20u,
+                       fpr_val(insn->rd));
         }
         break;
     }
     case 0x23: {
-        const uint64_t effaddr = reg_val(insn->rs1) + insn->imm;
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x00 || alusize == 0x04) {
             // storeInstClass(b,ub)
             trace_store(insn->pc, effaddr, 1, {insn->rs1, insn->rs2});
@@ -264,13 +291,17 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         }
         break;
     }
-    case 0x27:
-        if (alusize == 0x02)
-            ; // fpstoreInstClass(w)
-        else if (alusize == 0x03)
-            ; // fpstoreInstClass(d)
-        assert(false);
+    case 0x27: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        if (alusize == 0x02) {
+            // fpstore(rs1:x, rs2:f, w)
+            trace_store(insn->pc, effaddr, 4, {insn->rs1, insn->rs2 + 0x20u});
+        } else if (alusize == 0x03) {
+            // fpstore(rs1:x, rs2:f, d)
+            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2 + 0x20u});
+        }
         break;
+    }
     case 0x63: {
         const auto pc = insn->pc;
         const auto npc = next_insn->pc;
@@ -282,7 +313,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         const auto pc = insn->pc;
         const auto npc = next_insn->pc;
         if (insn->rd == /* ra = */ 0x01) {
-            trace_br(9, pc, true, npc, {}, {{1, reg_val(1)}});
+            trace_br(9, pc, true, npc, {}, {{1, xpr_val(1)}});
         } else if (insn->rd == 0x00) {
             trace_br(4, pc, true, npc, {}, {});
         }
@@ -297,30 +328,43 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         } else {
             // uncondIndirectBranchInstClass
             trace_br(5, pc, true, npc, {insn->rs1},
-                     {{insn->rd, reg_val(insn->rd)}});
+                     {{insn->rd, xpr_val(insn->rd)}});
         }
         break;
     }
     case 0x53:
-        assert(false && "fpInstClass");
-        // if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
-        //     alutype == 0x21)
-        //     // fpInstClass(rs1:f,rd:f)
-        // else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
-        //          alutype == 0x71)
-        //     // fpInstClass(rs1:f,rd:x)
-        // else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
-        //          alutype == 0x21)
-        //     // fpInstClass(rs1:x,rd:f)
-        // else if (alutype <= 0x3f)
-        //     puts("fpInstClass(rs1:x,rd
+        if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
+            alutype == 0x22) {
+            // fpInstClass(rs1:f,rd:f)
+            trace_alu(6, insn->pc, {insn->rs1 + 0x20u}, insn->rd + 0x20u,
+                      fpr_val(insn->rd));
+        } else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
+                   alutype == 0x71) {
+            // fpInstClass(rs1:f,rd:x)
+            trace_alu(6, insn->pc, {insn->rs1 + 0x20u}, insn->rd,
+                      xpr_val(insn->rd));
+        } else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
+                   alutype == 0x21) {
+            // fpInstClass(rs1:x,rd:f)
+            trace_alu(6, insn->pc, {insn->rs1}, insn->rd + 0x20u,
+                      fpr_val(insn->rd));
+        } else if (alutype <= 0x3f) {
+            // fpInstClass(rs1:f,rs2:f,rd:f) (arith)
+            trace_alu(6, insn->pc, {insn->rs1 + 0x20u, insn->rs2 + 0x20u},
+                      insn->rd + 0x20u, fpr_val(insn->rd));
+        } else if (alutype >= 0x40) {
+            // fpInstClass(rs1:f,rs2:f,rd:x) (cmp)
+            trace_alu(6, insn->pc, {insn->rs1 + 0x20u, insn->rs2 + 0x20u},
+                      insn->rd, xpr_val(insn->rd));
+        }
         break;
     case 0x43:
     case 0x47:
     case 0x4b:
     case 0x4f:
-        // fpInstClass(rs1:f,rs2:f,rs3:f,rd:f
-        assert(false);
+        // fpInstClass(rs1:f,rs2:f,rs3:f,rd:f)
+        trace_alu(6, insn->pc, {insn->rs1, insn->rs2, insn->rs3}, insn->rd,
+                  xpr_val(insn->rd));
         break;
     case 0x73:
         if (insn->inst == 0x10200073) {
