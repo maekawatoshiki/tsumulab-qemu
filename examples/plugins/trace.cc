@@ -18,19 +18,36 @@
 class Ctx {
   public:
     Ctx() {
-        this->trace_out.open("trace.out", std::ios::binary | std::ios::out);
-        assert(this->trace_out.is_open());
+        this->trace_file.open("trace.out", std::ios::binary);
+        assert(this->trace_file.is_open());
 
         this->reg_buf = g_byte_array_new();
     }
-    ~Ctx() {
-        this->trace_out.flush();
-        this->trace_out.close();
-    }
+    // NOTE: This destructor is not called on program exit.
+    // ~Ctx() {
+    //     this->trace_file.flush();
+    //     this->trace_file.close();
+    // }
 
-    std::ofstream trace_out;
+    std::vector<uint8_t> trace_bytes;
+    std::ofstream trace_file;
     GByteArray *reg_buf;
     std::optional<const rv_decode *> pending_insn = std::nullopt;
+
+    template <typename T> void write(const T &data) {
+        if (this->trace_bytes.size() > 100 * 1024 * 1024) {
+            this->flush();
+        }
+        this->trace_bytes.insert(this->trace_bytes.end(), (const char *)&data,
+                                 (const char *)&data + sizeof(T));
+    }
+
+    void flush() {
+      this->trace_file.write((const char *)this->trace_bytes.data(),
+          this->trace_bytes.size());
+        this->trace_file.flush();
+        this->trace_bytes.clear();
+    }
 };
 
 static Ctx ctx;
@@ -41,22 +58,22 @@ static void trace_alu(const uint8_t inst_type, const uint64_t pc,
     assert(inst_type == 0 || inst_type == 6 || inst_type == 7);
     uint8_t num_input_regs = input_regs.size();
     uint8_t num_output_regs = 1;
-    ctx.trace_out.write((char *)&pc, sizeof(pc));
-    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
-    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    ctx.write(pc);
+    ctx.write(inst_type);
+    ctx.write(num_input_regs);
     for (int i = 0; i < num_input_regs; i++) {
         assert(input_regs[i] < 0x40);
-        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+        ctx.write((uint8_t)input_regs[i]);
     }
-    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    ctx.write(num_output_regs);
     assert(rd < 0x40);
-    ctx.trace_out.write((char *)&rd, sizeof(rd));
+    ctx.write(rd);
     if (rd < 0x20) { // int reg
-        ctx.trace_out.write((char *)&val, 8);
+        ctx.write(val);
     } else { // fp reg
-        ctx.trace_out.write((char *)&val, 8);
+        ctx.write(val);
         uint64_t zero = 0;
-        ctx.trace_out.write((char *)&zero, 8);
+        ctx.write(zero);
     }
 }
 
@@ -67,24 +84,24 @@ static void trace_load(const uint64_t pc, uint64_t effective_addr,
     uint8_t inst_type = 1;
     uint8_t num_input_regs = input_regs.size();
     uint8_t num_output_regs = 1;
-    ctx.trace_out.write((char *)&pc, sizeof(pc));
-    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
-    ctx.trace_out.write((char *)&effective_addr, sizeof(effective_addr));
-    ctx.trace_out.write((char *)&access_size, sizeof(access_size));
-    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    ctx.write(pc);
+    ctx.write(inst_type);
+    ctx.write(effective_addr);
+    ctx.write(access_size);
+    ctx.write(num_input_regs);
     for (int i = 0; i < num_input_regs; i++) {
         assert(input_regs[i] < 0x40);
-        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+        ctx.write((uint8_t)input_regs[i]);
     }
-    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    ctx.write(num_output_regs);
     assert(rd < 0x40);
-    ctx.trace_out.write((char *)&rd, sizeof(rd));
+    ctx.write(rd);
     if (rd < 0x20) { // int reg
-        ctx.trace_out.write((char *)&val, 8);
+        ctx.write(val);
     } else { // fp reg
-        ctx.trace_out.write((char *)&val, 8);
+        ctx.write(val);
         uint64_t zero = 0;
-        ctx.trace_out.write((char *)&zero, 8);
+        ctx.write(zero);
     }
 }
 
@@ -96,25 +113,25 @@ trace_br(const uint8_t inst_type, const uint64_t pc, const uint8_t taken,
            inst_type == 9 || inst_type == 0xa);
     uint8_t num_input_regs = input_regs.size();
     uint8_t num_output_regs = output_regs.size();
-    ctx.trace_out.write((char *)&pc, sizeof(pc));
-    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
-    ctx.trace_out.write((char *)&taken, sizeof(taken));
+    ctx.write(pc);
+    ctx.write(inst_type);
+    ctx.write(taken);
     if (taken) {
-        ctx.trace_out.write((char *)&npc, sizeof(npc));
+        ctx.write(npc);
     }
-    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    ctx.write(num_input_regs);
     for (int i = 0; i < num_input_regs; i++) {
         assert(input_regs[i] < 0x40);
-        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+        ctx.write((uint8_t)input_regs[i]);
     }
-    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    ctx.write(num_output_regs);
     for (int i = 0; i < num_output_regs; i++) {
         const uint8_t rd = output_regs[i].first;
         const uint64_t val = output_regs[i].second;
         assert(rd < 0x40);
-        ctx.trace_out.write((char *)&rd, sizeof(rd));
+        ctx.write(rd);
         if (rd < 0x20) { // int reg
-            ctx.trace_out.write((char *)&val, 8);
+            ctx.write(val);
         } else { // fp reg
             assert(false && "Not implemented: fp reg");
         }
@@ -127,26 +144,26 @@ static void trace_store(const uint64_t pc, uint64_t effective_addr,
     uint8_t inst_type = 2;
     uint8_t num_input_regs = input_regs.size();
     uint8_t num_output_regs = 0;
-    ctx.trace_out.write((char *)&pc, sizeof(pc));
-    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
-    ctx.trace_out.write((char *)&effective_addr, sizeof(effective_addr));
-    ctx.trace_out.write((char *)&access_size, sizeof(access_size));
-    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
+    ctx.write(pc);
+    ctx.write(inst_type);
+    ctx.write(effective_addr);
+    ctx.write(access_size);
+    ctx.write(num_input_regs);
     for (int i = 0; i < num_input_regs; i++) {
-        assert(input_regs[i] < 0x40);
-        ctx.trace_out.write((char *)&input_regs[i], sizeof(uint8_t));
+        assert((uint8_t)input_regs[i] < 0x40);
+        ctx.write((uint8_t)input_regs[i]);
     }
-    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    ctx.write(num_output_regs);
 }
 
 static void trace_simple(const uint8_t inst_type, const uint64_t pc) {
     assert(inst_type == 0xb || inst_type == 0xc || inst_type == 0x7);
     uint8_t num_input_regs = 0;
     uint8_t num_output_regs = 0;
-    ctx.trace_out.write((char *)&pc, sizeof(pc));
-    ctx.trace_out.write((char *)&inst_type, sizeof(inst_type));
-    ctx.trace_out.write((char *)&num_input_regs, sizeof(num_input_regs));
-    ctx.trace_out.write((char *)&num_output_regs, sizeof(num_output_regs));
+    ctx.write(pc);
+    ctx.write(inst_type);
+    ctx.write(num_input_regs);
+    ctx.write(num_output_regs);
 }
 
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
@@ -422,9 +439,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
  * On plugin exit, print last instruction in cache
  */
 static void plugin_exit(qemu_plugin_id_t id, void *p) {
-    ctx.trace_out.flush();
-    ctx.trace_out.close();
-    return;
+    ctx.flush();
+    ctx.trace_file.close();
 }
 
 extern "C" {
