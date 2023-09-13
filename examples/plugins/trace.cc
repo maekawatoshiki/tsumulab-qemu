@@ -2,6 +2,7 @@
 #include "../../include/qemu/qemu-plugin.h"
 
 #include <assert.h>
+#include <cstdlib>
 #include <glib.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -15,10 +16,29 @@
 #include <tuple>
 #include <vector>
 
+#define ERR(fmt, ...)                                                          \
+    fprintf(stderr, "[%s:%-4d] \033[1;31m[  ERR]\033[0m " fmt "\n", __FILE__,  \
+            __LINE__, ##__VA_ARGS__)
+#define INFO(fmt, ...)                                                         \
+    fprintf(stderr, "[%s:%-4d] \033[1;32m[ INFO]\033[0m " fmt "\n", __FILE__,  \
+            __LINE__, ##__VA_ARGS__)
+#define WARN(fmt, ...)                                                         \
+    fprintf(stderr, "[%s:%-4d] \033[1;33m[ WARN]\033[0m " fmt "\n", __FILE__,  \
+            __LINE__, ##__VA_ARGS__)
+#define DEBUG(fmt, ...)                                                        \
+    fprintf(stderr, "[%s:%-4d] \033[1;34m[DEBUG]\033[0m " fmt "\n", __FILE__,  \
+            __LINE__, ##__VA_ARGS__)
+
 class Ctx {
   public:
     Ctx() {
-        this->trace_file.open("trace.out", std::ios::binary);
+        const auto trace_path = std::getenv("TRACE_PATH");
+        if (trace_path)
+            INFO("Using trace path '%s'", trace_path);
+        else
+            WARN("TRACE_PATH not set, using default path 'output.trace'");
+        this->trace_file.open(trace_path ? trace_path : "output.trace",
+                              std::ios::binary);
         assert(this->trace_file.is_open());
 
         this->reg_buf = g_byte_array_new();
@@ -177,15 +197,13 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
         // org.gnu.gdb.riscv.fpu
         // org.gnu.gdb.riscv.virtual
         // org.gnu.gdb.riscv.csr
-        // int idx = 0;
         for (int i = 0; i < num_reg_files; i++) {
             const qemu_plugin_register_file_t *reg_file = &reg_files[i];
-            printf("\033[1;32m%s\033[0m (%d registers)\n", reg_file->name,
-                   reg_file->num_regs);
+            DEBUG("%s (%d registers)", reg_file->name, reg_file->num_regs);
 #if 0
             for (int k = 0; k < reg_file->num_regs; k++) {
-                printf("%d (%d): %s\n", k, idx, reg_file->regs[k]);
-                idx += 1;
+                DEBUG("%d (%d) th register: %s", k, reg_file->base_reg + k,
+                      reg_file->regs[k]);
             }
 #endif
         }
@@ -214,7 +232,7 @@ static uint64_t fpr_val(const uint8_t reg) {
         ret = *((uint64_t *)ctx.reg_buf->data);
         break;
     default:
-        fprintf(stderr, "\033[1;31mRead bytes: %d\033[0m\n", n);
+        ERR("Read bytes: %d", n);
         assert(false && "FPR must 32 or 64 bits");
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
