@@ -41,6 +41,21 @@ class Ctx {
                               std::ios::binary);
         assert(this->trace_file.is_open());
 
+        // TODO: The prefix 'SPIKE_' is not appropriate.
+        const auto entry_addr_str = std::getenv("SPIKE_MAIN_ENTRY_ADDR");
+        const auto exit_addr_str = std::getenv("SPIKE_MAIN_EXIT_ADDR");
+        if (entry_addr_str && exit_addr_str) {
+            this->entry_addr = std::stoull(entry_addr_str, nullptr, 16);
+            this->exit_addr = std::stoull(exit_addr_str, nullptr, 16);
+            this->trace_enabled = false;
+            INFO("Using entry address 0x%lx", this->entry_addr);
+            INFO("Using exit address 0x%lx", this->exit_addr);
+        } else {
+            this->trace_enabled = true;
+            WARN("SPIKE_MAIN_ENTRY_ADDR or SPIKE_MAIN_EXIT_ADDR"
+                 " not set, tracing all instructions");
+        }
+
         this->reg_buf = g_byte_array_new();
     }
     // NOTE: This destructor is not called on program exit.
@@ -53,6 +68,8 @@ class Ctx {
     std::ofstream trace_file;
     GByteArray *reg_buf;
     std::optional<const rv_decode *> pending_insn = std::nullopt;
+    uint64_t entry_addr = 0, exit_addr = 0;
+    bool trace_enabled = false;
 
     template <typename T> void write(const T &data) {
         if (this->trace_bytes.size() > 100 * 1024 * 1024) {
@@ -240,11 +257,27 @@ static uint64_t fpr_val(const uint8_t reg) {
 }
 
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
-    const rv_decode *insn = ctx.pending_insn.value_or(nullptr);
     const rv_decode *next_insn = (rv_decode *)udata;
+
+    if (next_insn->pc == ctx.entry_addr) {
+        INFO("Entry address (%lx) reached, enabling tracing", ctx.entry_addr);
+        ctx.trace_enabled = true;
+    }
+    if (next_insn->pc == ctx.exit_addr) {
+        INFO("Exit address (%lx) reached, disabling tracing", ctx.exit_addr);
+        ctx.trace_enabled = false;
+    }
+    if (!ctx.trace_enabled)
+        return;
+
+    const rv_decode *insn = ctx.pending_insn.value_or(nullptr);
     ctx.pending_insn = next_insn;
     if (insn == nullptr)
         return;
+
+#if 0
+    DEBUG("opcode = 0x%lx", insn->inst);
+#endif
 
     const uint64_t opcode = insn->inst & 0x7f;
     const uint64_t alusize = (insn->inst >> 12) & 0x07;
@@ -418,6 +451,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         assert(false);
         break;
     default:
+        ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
         assert(false && "Unknown opcode");
         break;
     }
@@ -443,9 +477,12 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
          */
         insn = qemu_plugin_tb_get_insn(tb, i);
 
-        // We will never free `dec`.
+        // NOTE: We will never free `dec`.
         rv_decode *dec = (rv_decode *)malloc(sizeof(rv_decode));
         qemu_plugin_insn_decode(insn, dec);
+#if 0
+        DEBUG("Disas: %s", qemu_plugin_insn_disas(insn));
+#endif
 
         /* Register callback on instruction */
         qemu_plugin_register_vcpu_insn_exec_cb(insn, vcpu_insn_exec,
