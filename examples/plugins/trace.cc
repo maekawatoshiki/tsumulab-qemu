@@ -443,12 +443,21 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
             trace_simple(7, insn->pc);
         } else if (alusize >= 1) {
             // csrInstClass
-            assert(false);
+            trace_simple(0xb, insn->pc);
         }
         break;
     case 0x0f:
-        // slowAluInstClass
-        assert(false);
+        if (alutype == 1)
+            // slowAluInstClass
+            trace_alu(7, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                      xpr_val(insn->rd));
+        else if (alusize == 0) {
+            // slowAluInstClass (fence)
+            trace_simple(7, insn->pc);
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
+        }
         break;
     default:
         ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
