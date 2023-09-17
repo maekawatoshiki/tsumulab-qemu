@@ -367,26 +367,28 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
 #endif
         switch (funct5) {
         case 0b00000: // amoadd.*
-        case 0b11100: // amomaxu.*
         case 0b00001: // amoswap.*
+        case 0b01100: // amoand.*
+        case 0b01000: // amoor.*
+        case 0b00100: // amoxor.*
+        case 0b10000: // amomin.*
+        case 0b10100: // amomax.*
+        case 0b11000: // amominu.*
+        case 0b11100: // amomaxu.*
             trace_amo(insn->pc, xpr_val(insn->rs1), access_size,
                       {insn->rs1, insn->rs2}, insn->rd, xpr_val(insn->rd));
             break;
-        case 0b00010: {
-            // lr.*
+        case 0b00010: // lr.*
             // TODO: Currently we ignore reservation.
             trace_load(insn->pc, xpr_val(insn->rs1), access_size, {insn->rs1},
                        insn->rd, xpr_val(insn->rd));
             break;
-        }
-        case 0b00011: {
-            // sc.*
+        case 0b00011: // sc.*
             // TODO: Currently we ignore reservation.
             trace_store(insn->pc, xpr_val(insn->rs1), access_size,
                         {insn->rs1, insn->rs2});
             trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
             break;
-        }
         default:
             ERR("Unknown atomic operation: 0x%lx (0x%x)", insn->inst, insn->op);
             assert(false && "Unknown opcode");
