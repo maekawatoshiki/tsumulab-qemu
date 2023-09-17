@@ -142,6 +142,34 @@ static void trace_load(const uint64_t pc, uint64_t effective_addr,
     }
 }
 
+static void trace_amo(const uint64_t pc, uint64_t effective_addr,
+                      const uint8_t access_size,
+                      const std::vector<uint64_t> &input_regs, const uint8_t rd,
+                      const uint64_t val) {
+    uint8_t inst_type = 0xd; // amoInstClass
+    uint8_t num_input_regs = input_regs.size();
+    uint8_t num_output_regs = 1;
+    ctx.write(pc);
+    ctx.write(inst_type);
+    ctx.write(effective_addr);
+    ctx.write(access_size);
+    ctx.write(num_input_regs);
+    for (int i = 0; i < num_input_regs; i++) {
+        assert(input_regs[i] < 0x40);
+        ctx.write((uint8_t)input_regs[i]);
+    }
+    ctx.write(num_output_regs);
+    assert(rd < 0x40);
+    ctx.write(rd);
+    if (rd < 0x20) { // int reg
+        ctx.write(val);
+    } else { // fp reg
+        ctx.write(val);
+        uint64_t zero = 0;
+        ctx.write(zero);
+    }
+}
+
 static void
 trace_br(const uint8_t inst_type, const uint64_t pc, const uint8_t taken,
          const uint64_t npc, const std::vector<uint64_t> &input_regs,
@@ -326,6 +354,43 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
             // loadInstClass(d)
             trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
                        xpr_val(insn->rd));
+        }
+        break;
+    }
+    case 0x2f: { // Atomic operations
+        assert(0 <= alusize && alusize <= 3);
+        const uint8_t funct5 = alutype >> 2;
+        const uint8_t access_size = 1 << alusize;
+#if 0
+        DEBUG("funct5 = %x", funct5);
+        DEBUG("access_size = %d", access_size);
+#endif
+        switch (funct5) {
+        case 0b00000: // amoadd.*
+        case 0b11100: // amomaxu.*
+        case 0b00001: // amoswap.*
+            trace_amo(insn->pc, xpr_val(insn->rs1), access_size,
+                      {insn->rs1, insn->rs2}, insn->rd, xpr_val(insn->rd));
+            break;
+        case 0b00010: {
+            // lr.*
+            // TODO: Currently we ignore reservation.
+            trace_load(insn->pc, xpr_val(insn->rs1), access_size, {insn->rs1},
+                       insn->rd, xpr_val(insn->rd));
+            break;
+        }
+        case 0b00011: {
+            // sc.*
+            // TODO: Currently we ignore reservation.
+            trace_store(insn->pc, xpr_val(insn->rs1), access_size,
+                        {insn->rs1, insn->rs2});
+            trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+            break;
+        }
+        default:
+            ERR("Unknown atomic operation: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
+            break;
         }
         break;
     }
