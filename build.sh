@@ -13,8 +13,8 @@ else
         ../configure \
             --target-list=riscv32-linux-user,riscv64-linux-user \
             --enable-tcg \
-            --enable-plugins \
-            --enable-debug
+            --enable-plugins
+            # --enable-debug # for debugging; forces -O0
         make -j
     )
 fi
