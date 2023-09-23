@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <cstdlib>
+#include <functional>
 #include <glib.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <iostream>
 #include <optional>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #define ERR(fmt, ...)                                                          \
@@ -66,10 +68,14 @@ class Ctx {
 
     std::vector<uint8_t> trace_bytes;
     std::ofstream trace_file;
-    GByteArray *reg_buf;
-    std::optional<const rv_decode *> pending_insn = std::nullopt;
+
+    std::optional<std::function<void(const rv_decode *next_insn)>>
+        pending_trace = std::nullopt;
+
     uint64_t entry_addr = 0, exit_addr = 0;
     bool trace_enabled = false;
+
+    GByteArray *reg_buf;
 
     template <typename T> void write(const T &data) {
         if (this->trace_bytes.size() > 100 * 1024 * 1024) {
@@ -285,23 +291,23 @@ static uint64_t fpr_val(const uint8_t reg) {
 }
 
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
-    const rv_decode *next_insn = (rv_decode *)udata;
+    const rv_decode *insn = (rv_decode *)udata;
 
-    if (next_insn->pc == ctx.entry_addr) {
+    if (insn->pc == ctx.entry_addr) {
         INFO("Entry address (%lx) reached, enabling tracing", ctx.entry_addr);
         ctx.trace_enabled = true;
     }
-    if (next_insn->pc == ctx.exit_addr) {
+    if (insn->pc == ctx.exit_addr) {
         INFO("Exit address (%lx) reached, disabling tracing", ctx.exit_addr);
         ctx.trace_enabled = false;
     }
     if (!ctx.trace_enabled)
         return;
 
-    const rv_decode *insn = ctx.pending_insn.value_or(nullptr);
-    ctx.pending_insn = next_insn;
-    if (insn == nullptr)
-        return;
+    if (const auto trace =
+            std::exchange(ctx.pending_trace, std::nullopt).value_or(nullptr)) {
+        trace(insn);
+    }
 
 #if 0
     DEBUG("opcode = 0x%lx", insn->inst);
@@ -319,41 +325,63 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     case 0x37:
     case 0x17: {
         // aluInstClass(lui, auipc)
-        trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+        ctx.pending_trace = [insn](const rv_decode *) {
+            trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+        };
         break;
     }
     case 0x13: // aluInstClass(alu(immediate))
-        trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
+        ctx.pending_trace = [insn](const rv_decode *) {
+            trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
+        };
         break;
     case 0x33:
         if (alutype == 0x00 || alutype == 0x20) {
             // aluInstClass(alu)
-            trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
-                      xpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                          xpr_val(insn->rd));
+            };
         } else if (alutype == 0x01) {
             // slowAluInstClass
-            trace_alu(7, insn->pc, {insn->rs1, insn->rs1}, insn->rd,
-                      xpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(7, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                          xpr_val(insn->rd));
+            };
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     case 0x03: {
         const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x00 || alusize == 0x04) {
             // loadInstClass(b,ub)
-            trace_load(insn->pc, effaddr, 1, {insn->rs1}, insn->rd,
-                       xpr_val(insn->rd));
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 1, {insn->rs1}, insn->rd,
+                           xpr_val(insn->rd));
+            };
         } else if (alusize == 0x01 || alusize == 0x05) {
             // loadInstClass(h,uh)
-            trace_load(insn->pc, effaddr, 2, {insn->rs1}, insn->rd,
-                       xpr_val(insn->rd));
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 2, {insn->rs1}, insn->rd,
+                           xpr_val(insn->rd));
+            };
         } else if (alusize == 0x02) {
             // loadInstClass(w)
-            trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
-                       xpr_val(insn->rd));
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
+                           xpr_val(insn->rd));
+            };
         } else if (alusize == 0x03) {
             // loadInstClass(d)
-            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
-                       xpr_val(insn->rd));
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
+                           xpr_val(insn->rd));
+            };
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     }
@@ -361,6 +389,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         assert(0 <= alusize && alusize <= 3);
         const uint8_t funct5 = alutype >> 2;
         const uint8_t access_size = 1 << alusize;
+        const uint64_t effaddr = xpr_val(insn->rs1);
 #if 0
         DEBUG("funct5 = %x", funct5);
         DEBUG("access_size = %d", access_size);
@@ -375,19 +404,28 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         case 0b10100: // amomax.*
         case 0b11000: // amominu.*
         case 0b11100: // amomaxu.*
-            trace_amo(insn->pc, xpr_val(insn->rs1), access_size,
-                      {insn->rs1, insn->rs2}, insn->rd, xpr_val(insn->rd));
+            ctx.pending_trace = [insn, access_size,
+                                 effaddr](const rv_decode *) {
+                trace_amo(insn->pc, effaddr, access_size,
+                          {insn->rs1, insn->rs2}, insn->rd, xpr_val(insn->rd));
+            };
             break;
         case 0b00010: // lr.*
             // TODO: Currently we ignore reservation.
-            trace_load(insn->pc, xpr_val(insn->rs1), access_size, {insn->rs1},
-                       insn->rd, xpr_val(insn->rd));
+            ctx.pending_trace = [insn, access_size,
+                                 effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, access_size, {insn->rs1},
+                           insn->rd, xpr_val(insn->rd));
+            };
             break;
         case 0b00011: // sc.*
             // TODO: Currently we ignore reservation.
-            trace_store(insn->pc, xpr_val(insn->rs1), access_size,
-                        {insn->rs1, insn->rs2});
-            trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+            ctx.pending_trace = [insn, access_size,
+                                 effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, access_size,
+                            {insn->rs1, insn->rs2});
+                trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+            };
             break;
         default:
             ERR("Unknown atomic operation: 0x%lx (0x%x)", insn->inst, insn->op);
@@ -400,12 +438,19 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x02) {
             // fpload(rs1:x,rd:f,w)
-            trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd + 0x20u,
-                       fpr_val(insn->rd));
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd + 0x20u,
+                           fpr_val(insn->rd));
+            };
         } else if (alusize == 0x03) {
             // fpload(rs1:x,rd:f,d)
-            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd + 0x20u,
-                       fpr_val(insn->rd));
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd + 0x20u,
+                           fpr_val(insn->rd));
+            };
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     }
@@ -413,16 +458,27 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x00 || alusize == 0x04) {
             // storeInstClass(b,ub)
-            trace_store(insn->pc, effaddr, 1, {insn->rs1, insn->rs2});
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, 1, {insn->rs1, insn->rs2});
+            };
         } else if (alusize == 0x01 || alusize == 0x05) {
             // storeInstClass(h,uh)
-            trace_store(insn->pc, effaddr, 2, {insn->rs1, insn->rs2});
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, 2, {insn->rs1, insn->rs2});
+            };
         } else if (alusize == 0x02) {
             // storeInstClass(w)
-            trace_store(insn->pc, effaddr, 4, {insn->rs1, insn->rs2});
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, 4, {insn->rs1, insn->rs2});
+            };
         } else if (alusize == 0x03) {
             // storeInstClass(d)
-            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2});
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2});
+            };
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     }
@@ -430,67 +486,99 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         if (alusize == 0x02) {
             // fpstore(rs1:x, rs2:f, w)
-            trace_store(insn->pc, effaddr, 4, {insn->rs1, insn->rs2 + 0x20u});
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, 4,
+                            {insn->rs1, insn->rs2 + 0x20u});
+            };
         } else if (alusize == 0x03) {
             // fpstore(rs1:x, rs2:f, d)
-            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2 + 0x20u});
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_store(insn->pc, effaddr, 8,
+                            {insn->rs1, insn->rs2 + 0x20u});
+            };
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     }
     case 0x63: {
         const auto pc = insn->pc;
-        const auto npc = next_insn->pc;
-        const auto taken = pc + 4 != npc;
-        trace_br(3, pc, taken, npc, {}, {});
+        ctx.pending_trace = [insn, pc](const rv_decode *next_insn) {
+            const auto npc = next_insn->pc;
+            const auto taken = pc + 4 != npc;
+            trace_br(3, pc, taken, npc, {insn->rs1, insn->rs2},
+                     {{insn->rd, xpr_val(insn->rd)}});
+        };
         break;
     }
     case 0x6f: {
-        const auto pc = insn->pc;
-        const auto npc = next_insn->pc;
-        if (insn->rd == /* ra = */ 0x01) {
-            trace_br(9, pc, true, npc, {}, {{1, xpr_val(1)}});
-        } else if (insn->rd == 0x00) {
-            trace_br(4, pc, true, npc, {}, {});
-        }
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            if (insn->rd == /* ra = */ 0x01) {
+                trace_br(9, pc, true, npc, {}, {{1, xpr_val(insn->rd)}});
+            } else if (insn->rd == 0x00) {
+                trace_br(4, pc, true, npc, {}, {});
+            } else {
+                ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+                assert(false && "Unknown opcode");
+            }
+        };
         break;
     }
     case 0x67: {
-        const auto pc = insn->pc;
-        const auto npc = next_insn->pc;
-        if (insn->rd == 0 && insn->rs1 == 1 && insn->imm == 0) {
-            // retClass
-            trace_br(0xa, pc, true, npc, {1}, {});
-        } else {
-            // uncondIndirectBranchInstClass
-            trace_br(5, pc, true, npc, {insn->rs1},
-                     {{insn->rd, xpr_val(insn->rd)}});
-        }
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            if (insn->rd == 0 && insn->rs1 == 1 && insn->imm == 0) {
+                // retClass
+                trace_br(0xa, pc, true, npc, {1}, {});
+            } else {
+                // uncondIndirectBranchInstClass
+                trace_br(5, pc, true, npc, {insn->rs1},
+                         {{insn->rd, xpr_val(insn->rd)}});
+            }
+        };
         break;
     }
     case 0x53:
         if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
             alutype == 0x22) {
             // fpInstClass(rs1:f,rd:f)
-            trace_alu(6, insn->pc, {insn->rs1 + 0x20u}, insn->rd + 0x20u,
-                      fpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(6, insn->pc, {insn->rs1 + 0x20u}, insn->rd + 0x20u,
+                          fpr_val(insn->rd));
+            };
         } else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
                    alutype == 0x71) {
             // fpInstClass(rs1:f,rd:x)
-            trace_alu(6, insn->pc, {insn->rs1 + 0x20u}, insn->rd,
-                      xpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(6, insn->pc, {insn->rs1 + 0x20u}, insn->rd,
+                          xpr_val(insn->rd));
+            };
         } else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
                    alutype == 0x21) {
             // fpInstClass(rs1:x,rd:f)
-            trace_alu(6, insn->pc, {insn->rs1}, insn->rd + 0x20u,
-                      fpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(6, insn->pc, {insn->rs1}, insn->rd + 0x20u,
+                          fpr_val(insn->rd));
+            };
         } else if (alutype <= 0x3f) {
             // fpInstClass(rs1:f,rs2:f,rd:f) (arith)
-            trace_alu(6, insn->pc, {insn->rs1 + 0x20u, insn->rs2 + 0x20u},
-                      insn->rd + 0x20u, fpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(6, insn->pc, {insn->rs1 + 0x20u, insn->rs2 + 0x20u},
+                          insn->rd + 0x20u, fpr_val(insn->rd));
+            };
         } else if (alutype >= 0x40) {
             // fpInstClass(rs1:f,rs2:f,rd:x) (cmp)
-            trace_alu(6, insn->pc, {insn->rs1 + 0x20u, insn->rs2 + 0x20u},
-                      insn->rd, xpr_val(insn->rd));
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(6, insn->pc, {insn->rs1 + 0x20u, insn->rs2 + 0x20u},
+                          insn->rd, xpr_val(insn->rd));
+            };
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     case 0x43:
@@ -498,8 +586,10 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     case 0x4b:
     case 0x4f:
         // fpInstClass(rs1:f,rs2:f,rs3:f,rd:f)
-        trace_alu(6, insn->pc, {insn->rs1, insn->rs2, insn->rs3}, insn->rd,
-                  xpr_val(insn->rd));
+        ctx.pending_trace = [insn](const rv_decode *) {
+            trace_alu(6, insn->pc, {insn->rs1, insn->rs2, insn->rs3}, insn->rd,
+                      xpr_val(insn->rd));
+        };
         break;
     case 0x73:
         if (insn->inst == 0x10200073) {
@@ -511,14 +601,19 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         } else if (alusize >= 1) {
             // csrInstClass
             trace_simple(0xb, insn->pc);
+        } else {
+            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            assert(false && "Unknown opcode");
         }
         break;
     case 0x0f:
-        if (alutype == 1)
+        if (alutype == 1) {
             // slowAluInstClass
-            trace_alu(7, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
-                      xpr_val(insn->rd));
-        else if (alusize == 0) {
+            ctx.pending_trace = [insn](const rv_decode *) {
+                trace_alu(7, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                          xpr_val(insn->rd));
+            };
+        } else if (alusize == 0) {
             // slowAluInstClass (fence)
             trace_simple(7, insn->pc);
         } else {
@@ -570,6 +665,11 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
  * On plugin exit, print last instruction in cache
  */
 static void plugin_exit(qemu_plugin_id_t id, void *p) {
+    if (const auto trace =
+            std::exchange(ctx.pending_trace, std::nullopt).value_or(nullptr)) {
+        trace(nullptr);
+    }
+
     ctx.flush();
     ctx.trace_file.close();
 }
