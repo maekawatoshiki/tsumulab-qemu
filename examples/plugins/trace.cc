@@ -45,13 +45,10 @@ class Ctx {
 
         // TODO: The prefix 'SPIKE_' is not appropriate.
         const auto entry_addr_str = std::getenv("SPIKE_MAIN_ENTRY_ADDR");
-        const auto exit_addr_str = std::getenv("SPIKE_MAIN_EXIT_ADDR");
-        if (entry_addr_str && exit_addr_str) {
+        if (entry_addr_str) {
             this->entry_addr = std::stoull(entry_addr_str, nullptr, 16);
-            this->exit_addr = std::stoull(exit_addr_str, nullptr, 16);
             this->trace_enabled = false;
             INFO("Using entry address 0x%lx", this->entry_addr);
-            INFO("Using exit address 0x%lx", this->exit_addr);
         } else {
             this->trace_enabled = true;
             WARN("SPIKE_MAIN_ENTRY_ADDR or SPIKE_MAIN_EXIT_ADDR"
@@ -69,6 +66,7 @@ class Ctx {
     std::vector<uint8_t> trace_bytes;
     std::ofstream trace_file;
 
+    const rv_decode *prev_insn = nullptr;
     std::optional<std::function<void(const rv_decode *next_insn)>>
         pending_trace = std::nullopt;
 
@@ -294,20 +292,28 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     const rv_decode *insn = (rv_decode *)udata;
 
     if (insn->pc == ctx.entry_addr) {
-        INFO("Entry address (%lx) reached, enabling tracing", ctx.entry_addr);
+        const uint64_t opcode = ctx.prev_insn->inst & 0x7f;
+        assert((opcode == 0x6f || opcode == 0x67) &&
+               "Entry address must be reached by call instruction");
         ctx.trace_enabled = true;
+        ctx.exit_addr = ctx.prev_insn->pc + 4;
+        INFO("Entry address (0x%lx) reached, enabling tracing", ctx.entry_addr);
+        INFO("Setting exit address to 0x%lx", ctx.exit_addr);
     }
     if (insn->pc == ctx.exit_addr) {
-        INFO("Exit address (%lx) reached, disabling tracing", ctx.exit_addr);
+        INFO("Exit address (0x%lx) reached, disabling tracing", ctx.exit_addr);
         ctx.trace_enabled = false;
     }
-    if (!ctx.trace_enabled)
-        return;
 
     if (const auto trace =
             std::exchange(ctx.pending_trace, std::nullopt).value_or(nullptr)) {
         trace(insn);
     }
+
+    ctx.prev_insn = insn;
+
+    if (!ctx.trace_enabled)
+        return;
 
 #if 0
     DEBUG("opcode = 0x%lx", insn->inst);
@@ -502,7 +508,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         }
         break;
     }
-    case 0x63: {
+    case 0x63: { // branch (e.g. beq)
         const auto pc = insn->pc;
         ctx.pending_trace = [insn, pc](const rv_decode *next_insn) {
             const auto npc = next_insn->pc;
@@ -516,9 +522,9 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         ctx.pending_trace = [insn](const rv_decode *next_insn) {
             const auto pc = insn->pc;
             const auto npc = next_insn->pc;
-            if (insn->rd == /* ra = */ 0x01) {
+            if (insn->rd == /* ra = */ 0x01) { // jal
                 trace_br(9, pc, true, npc, {}, {{1, xpr_val(insn->rd)}});
-            } else if (insn->rd == 0x00) {
+            } else if (insn->rd == 0x00) { // j
                 trace_br(4, pc, true, npc, {}, {});
             } else {
                 ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
@@ -527,7 +533,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         };
         break;
     }
-    case 0x67: {
+    case 0x67: { // jalr
         ctx.pending_trace = [insn](const rv_decode *next_insn) {
             const auto pc = insn->pc;
             const auto npc = next_insn->pc;
