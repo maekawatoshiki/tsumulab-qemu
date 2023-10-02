@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-CC := $(or $(RISCV),$(HOME)/riscv/bin/riscv32-unknown-elf-gcc)
+CC := $(or $(RISCV),$(HOME)/riscv/rv32/bin/riscv32-unknown-linux-gnu-gcc -static)
 PLUGIN ?= libbb.so
 TRACE_TARGET ?= fibo
 
@@ -28,7 +28,7 @@ plugins: fibo #! Build our plugins
 
 trace: #! Generate trace for $TRACE_TARGET
 	make libtrace.so -C ./plugins
-	../build/qemu-riscv32 -d plugin -plugin ./plugins/libtrace.so $(TRACE_TARGET)
+	TRACE_PATH=/tmp/output.trace time ../build/qemu-riscv32 -d plugin -plugin ./plugins/libtrace.so $(TRACE_TARGET)
 
 clean: #! Remove generated binaries
 	rm -f fibo
