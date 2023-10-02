@@ -282,7 +282,7 @@ static uint64_t fpr_val(const uint8_t reg) {
         break;
     default:
         ERR("Read bytes: %d", n);
-        assert(false && "FPR must 32 or 64 bits");
+        assert(false && "FPR must be 32 or 64 bits");
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
