@@ -55,6 +55,14 @@ class Ctx {
                  " not set, tracing all instructions");
         }
 
+        const auto skip_insns = std::getenv("SKIP_INSNS");
+        if (skip_insns) {
+            this->skip_first_n_insns_from_entry =
+                std::stoull(skip_insns, nullptr, 10);
+            INFO("Skipping first %lu insns from entry",
+                 this->skip_first_n_insns_from_entry);
+        }
+
         this->reg_buf = g_byte_array_new();
     }
     // NOTE: This destructor is not called on program exit.
@@ -70,6 +78,8 @@ class Ctx {
     std::optional<std::function<void(const rv_decode *next_insn)>>
         pending_trace = std::nullopt;
 
+    uint64_t skip_first_n_insns_from_entry = 0;
+    uint64_t num_insns_from_entry = 0;
     uint64_t entry_addr = 0, exit_addr = 0;
     bool trace_enabled = false;
 
@@ -313,6 +323,9 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     ctx.prev_insn = insn;
 
     if (!ctx.trace_enabled)
+        return;
+
+    if (ctx.num_insns_from_entry++ < ctx.skip_first_n_insns_from_entry)
         return;
 
 #if 0
