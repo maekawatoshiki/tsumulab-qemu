@@ -526,8 +526,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         ctx.pending_trace = [insn, pc](const rv_decode *next_insn) {
             const auto npc = next_insn->pc;
             const auto taken = pc + 4 != npc;
-            trace_br(3, pc, taken, npc, {insn->rs1, insn->rs2},
-                     {{insn->rd, xpr_val(insn->rd)}});
+            trace_br(3, pc, taken, npc, {insn->rs1, insn->rs2}, {});
         };
         break;
     }
