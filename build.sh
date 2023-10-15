@@ -5,7 +5,7 @@
 export CC=/usr/lib/ccache/gcc-12 # fails with gcc-10
 
 if [ -d build ]; then
-    cd build && make -j
+    (cd build && make -j)
 else
     mkdir -p build
     (
@@ -18,3 +18,5 @@ else
         make -j
     )
 fi
+
+(cd examples && make trace_plugin -j)
