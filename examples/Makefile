@@ -28,7 +28,7 @@ plugins: fibo #! Build our plugins
 
 trace: #! Generate trace for $TRACE_TARGET
 	make libtrace.so -C ./plugins
-	TRACE_PATH=/tmp/output.trace time ../build/qemu-riscv32 -d plugin -plugin ./plugins/libtrace.so $(TRACE_TARGET)
+	TRACE_PATH=/tmp/output.trace time ../build/qemu-riscv32 -one-insn-per-tb -d plugin -plugin ./plugins/libtrace.so $(TRACE_TARGET)
 
 clean: #! Remove generated binaries
 	rm -f fibo
