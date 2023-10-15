@@ -656,6 +656,11 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
     struct qemu_plugin_insn *insn;
 
     const size_t n = qemu_plugin_tb_n_insns(tb);
+    assert(n == 1 &&
+           "TB must contain only one instruction. Otherwise, incorrect values "
+           "will be read from registers. Did you forget to use "
+           "-one-instr-per-tb?");
+
     for (size_t i = 0; i < n; i++) {
         /*
          * `insn` is shared between translations in QEMU, copy needed data here.
