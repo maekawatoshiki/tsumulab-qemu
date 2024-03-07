@@ -14,7 +14,7 @@ CFLAGS := $(shell pkg-config --cflags glib-2.0)
 CFLAGS += -fPIC -Wall -O3
 CFLAGS += -I$(QEMU_SRC)/include/qemu -I$(QEMU_SRC) -I$(QEMU_SRC)/include -I$(QEMU_SRC)/build
 
-CXXFLAGS := -fPIC -Wall -O3 -std=c++17 -fvisibility=hidden
+CXXFLAGS := -fPIC -Wall -Wextra -O3 -std=c++17 -fvisibility=hidden
 CXXFLAGS += $(shell pkg-config --cflags glib-2.0)
 CXXFLAGS += -I$(QEMU_SRC) -I$(QEMU_SRC)/include -I$(QEMU_SRC)/build
 
