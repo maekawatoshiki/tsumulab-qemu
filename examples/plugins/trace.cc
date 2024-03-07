@@ -246,6 +246,7 @@ static void trace_simple(const uint8_t inst_type, const uint64_t pc) {
 }
 
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
+    (void)(id);
     assert(vcpu_index == 0 && "Only one vCPU supported");
 
     {
@@ -269,11 +270,21 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     }
 }
 
-static int32_t xpr_val(const uint8_t reg) {
+static int64_t xpr_val(const uint8_t reg) {
     assert(reg < 0x20);
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
-    assert(n == 4 && "RV32 support only for now");
-    const auto ret = *((int32_t *)ctx.reg_buf->data);
+    int64_t ret;
+    switch (n) {
+    case 4:
+        ret = *((int32_t *)ctx.reg_buf->data);
+        break;
+    case 8:
+        ret = *((int64_t *)ctx.reg_buf->data);
+        break;
+    default:
+        ERR("Read bytes: %d", n);
+        assert(false && "XPR must be 32 or 64 bits");
+    }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
 }
@@ -299,6 +310,7 @@ static uint64_t fpr_val(const uint8_t reg) {
 }
 
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
+    (void)(cpu_index);
     const rv_decode *insn = (rv_decode *)udata;
 
     if (insn->pc == ctx.entry_addr) {
@@ -405,7 +417,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         break;
     }
     case 0x2f: { // Atomic operations
-        assert(0 <= alusize && alusize <= 3);
+        assert(alusize <= 3);
         const uint8_t funct5 = alutype >> 2;
         const uint8_t access_size = 1 << alusize;
         const uint64_t effaddr = xpr_val(insn->rs1);
@@ -653,6 +665,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
  * a callback on each instruction and memory access.
  */
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
+    (void)(id);
     struct qemu_plugin_insn *insn;
 
     const size_t n = qemu_plugin_tb_n_insns(tb);
@@ -688,6 +701,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
  * On plugin exit, print last instruction in cache
  */
 static void plugin_exit(qemu_plugin_id_t id, void *p) {
+    (void)(id);
+    (void)(p);
     if (const auto trace =
             std::exchange(ctx.pending_trace, std::nullopt).value_or(nullptr)) {
         trace(nullptr);
@@ -703,6 +718,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info, int argc,
                                            char **argv) {
+    (void)(argc);
+    (void)(argv);
     assert(!info->system_emulation && "System emulation not supported");
 
     // Register translation block and exit callbacks
