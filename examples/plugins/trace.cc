@@ -412,8 +412,14 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
                 trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
                            xpr_val(insn->rd));
             };
+        } else if (alusize == 0x06) {
+            // loadInstClass(lwu)
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
+                           xpr_val(insn->rd));
+            };
         } else {
-            ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+            ERR("Unknown opcode: 0x%lx (0x%lx, 0x%lx)", insn->inst, opcode, alusize);
             assert(false && "Unknown opcode");
         }
         break;
