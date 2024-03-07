@@ -3,7 +3,8 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-CC := $(or $(RISCV),$(HOME)/riscv/rv32/bin/riscv32-unknown-linux-gnu-gcc -static)
+BITS ?= 32
+CC := $(or $(RISCV),$(HOME)/riscv/rv$(BITS)/bin/riscv$(BITS)-unknown-linux-gnu-gcc -static)
 PLUGIN ?= libbb.so
 
 # All targets are phony
@@ -16,7 +17,10 @@ format: #! Formats code
 	(cd `git rev-parse --show-toplevel` && git diff -U0 --no-color HEAD ./examples | clang-format-diff -style "{BasedOnStyle: LLVM, IndentWidth: 4}" -i -p1)
 
 run: fibo #! Run fibo
-	../build/qemu-riscv32 fibo
+	../build/qemu-riscv$(BITS) fibo
+
+run_trace: fibo #! Generate trace for fibo
+	../build/qemu-riscv$(BITS) -one-insn-per-tb -d plugin -plugin ./plugins/libtrace.so fibo
 
 trace_plugin: #! Build trace plugin
 	make libtrace.so -C ./plugins
