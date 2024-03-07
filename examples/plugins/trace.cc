@@ -361,12 +361,14 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         };
         break;
     }
+    case 0x1b: // aluInstClass(alu(immediate)) (e.g., slliw in RV64I)
     case 0x13: // aluInstClass(alu(immediate))
         ctx.pending_trace = [insn](const rv_decode *) {
             trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
         };
         break;
     case 0x33:
+    case 0x3b: // (e.g., addw in RV64I)
         if (alutype == 0x00 || alutype == 0x20) {
             // aluInstClass(alu)
             ctx.pending_trace = [insn](const rv_decode *) {
@@ -652,7 +654,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         }
         break;
     default:
-        ERR("Unknown opcode: 0x%lx (0x%x)", insn->inst, insn->op);
+        ERR("Unknown opcode: 0x%lx (0x%lx)", insn->inst, opcode);
         assert(false && "Unknown opcode");
         break;
     }
@@ -721,6 +723,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     (void)(argc);
     (void)(argv);
     assert(!info->system_emulation && "System emulation not supported");
+
+    INFO("Target name: %s", info->target_name);
 
     // Register translation block and exit callbacks
     qemu_plugin_register_vcpu_init_cb(id, vcpu_init);
