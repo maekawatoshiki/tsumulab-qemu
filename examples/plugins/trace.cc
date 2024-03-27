@@ -309,6 +309,19 @@ static uint64_t fpr_val(const uint8_t reg) {
     return ret;
 }
 
+static void trace_compressed(const rv_decode *insn) {
+    assert(insn->inst < 0x10000 && "Compressed instruction must be 16 bits");
+
+    const uint8_t funct4 = insn->inst >> 12;
+    const uint8_t funct3 = insn->inst >> 13;
+    const uint8_t op = insn->inst & 0b11;
+
+#if 1
+    fprintf(stderr, "insn: %016b, funct4: %04b, op: %02b\n", (int)insn->inst,
+            funct4, op);
+#endif
+}
+
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     (void)(cpu_index);
     const rv_decode *insn = (rv_decode *)udata;
@@ -345,6 +358,11 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
 #if 0
     DEBUG("opcode = 0x%lx", insn->inst);
 #endif
+
+    if (is_compressed) {
+        trace_compressed(insn);
+        return;
+    }
 
     const uint64_t opcode = insn->inst & 0x7f;
     const uint64_t alusize = (insn->inst >> 12) & 0x07;
