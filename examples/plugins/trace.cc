@@ -312,14 +312,52 @@ static uint64_t fpr_val(const uint8_t reg) {
 static void trace_compressed(const rv_decode *insn) {
     assert(insn->inst < 0x10000 && "Compressed instruction must be 16 bits");
 
-    const uint8_t funct4 = insn->inst >> 12;
-    const uint8_t funct3 = insn->inst >> 13;
-    const uint8_t op = insn->inst & 0b11;
+    const uint8_t funct4 = insn->inst >> 12; // 4 bit
+    const uint8_t funct3 = insn->inst >> 13; // 3 bit
+    const uint8_t op = insn->inst & 0b11;    // 2 bit
 
-#if 1
-    fprintf(stderr, "insn: %016b, funct4: %04b, op: %02b\n", (int)insn->inst,
-            funct4, op);
-#endif
+#define UNKNOWN                                                                \
+    do {                                                                       \
+        ERR("insn: %016b, funct4: %04b, op: %02b\n", (int)insn->inst, funct4,  \
+            op);                                                               \
+        assert(false && "Unknown opcode");                                     \
+    } while (0)
+
+    switch (op) {
+    case 0b00:
+        switch (funct3) {
+        case 0x000: // c.addi4spn
+            ctx.pending_trace = [insn](const rv_decode *) {
+                DEBUG("c.addi4spn (rd = %d, imm = %d) (dst = %lx)", insn->rd,
+                      insn->imm, xpr_val(insn->rd));
+                trace_alu(0, insn->pc, {2}, insn->rd, xpr_val(insn->rd));
+            };
+            break;
+        case 0b010: { // c.lw
+            const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+            DEBUG("c.lw (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)",
+                  insn->rs1, insn->rd, insn->imm, effaddr);
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
+                           xpr_val(insn->rd));
+            };
+        } break;
+        default:
+            UNKNOWN;
+            break;
+        }
+        break;
+    case 0b01:
+        UNKNOWN;
+        break;
+    case 0b10:
+        UNKNOWN;
+        break;
+    default:
+        UNKNOWN;
+    }
+
+#undef UNKNOWN
 }
 
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
