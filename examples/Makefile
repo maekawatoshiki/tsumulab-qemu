@@ -11,7 +11,7 @@ PLUGIN ?= libbb.so
 .PHONY: $(shell egrep -o ^[a-zA-Z0-9_-]+: $(MAKEFILE_LIST) | sed 's/://')
 
 fibo: #! Compile fibo.c
-	$(CC) -o fibo ../../stanford/Perm.c
+	$(CC) -o fibo fibo.c
 
 format: #! Formats code
 	(cd `git rev-parse --show-toplevel` && git diff -U0 --no-color HEAD ./examples | clang-format-diff -style "{BasedOnStyle: LLVM, IndentWidth: 4}" -i -p1)

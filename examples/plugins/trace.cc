@@ -312,6 +312,8 @@ static uint64_t fpr_val(const uint8_t reg) {
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     (void)(cpu_index);
     const rv_decode *insn = (rv_decode *)udata;
+    const bool is_compressed = (insn->inst & 0b11) != 0b11;
+    assert(!is_compressed && "C extension is not yet supported");
 
     if (insn->pc == ctx.entry_addr) {
         const uint64_t opcode = ctx.prev_insn->inst & 0x7f;
