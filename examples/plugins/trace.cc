@@ -71,6 +71,8 @@ class Ctx {
     //     this->trace_file.close();
     // }
 
+    int bits;
+
     std::vector<uint8_t> trace_bytes;
     std::ofstream trace_file;
 
@@ -314,7 +316,7 @@ static void trace_compressed(const rv_decode *insn) {
 
     const uint8_t funct4 = insn->inst >> 12; // 4 bit
     const uint8_t funct3 = insn->inst >> 13; // 3 bit
-    const uint8_t op = insn->inst & 0b11;    // 2 bit
+    const uint8_t op = insn->inst & 0b111111;
 
 #define UNKNOWN                                                                \
     do {                                                                       \
@@ -323,7 +325,7 @@ static void trace_compressed(const rv_decode *insn) {
         assert(false && "Unknown opcode");                                     \
     } while (0)
 
-    switch (op) {
+    switch (op & 0b11) {
     case 0b00:
         switch (funct3) {
         case 0x000: // c.addi4spn
@@ -351,7 +353,43 @@ static void trace_compressed(const rv_decode *insn) {
         UNKNOWN;
         break;
     case 0b10:
-        UNKNOWN;
+        switch (funct4) {
+        case 0b1000:
+            if (op == 0b000010) {
+                // c.jr
+                ctx.pending_trace = [insn](const rv_decode *next_insn) {
+                    const auto pc = insn->pc;
+                    const auto npc = next_insn->pc;
+                    DEBUG("c.jr (rs1 = %d) (pc = %lx, npc = %lx)", insn->rs1,
+                          pc, npc);
+                    trace_br(5, pc, true, npc, {insn->rs1}, {});
+                };
+            } else {
+                // c.mv
+                ctx.pending_trace = [insn](const rv_decode *) {
+                    DEBUG("c.mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs1,
+                          insn->rd, xpr_val(insn->rd));
+                    // BUG: rs2 should be used instead of rs1
+                    trace_alu(0, insn->pc, {insn->rs1}, insn->rd,
+                              xpr_val(insn->rd));
+                };
+            }
+            break;
+        // c.ldsp (RV64)
+        case 0b0110:
+        case 0b0111: {
+            assert(ctx.bits == 64);
+            const uint64_t effaddr = xpr_val(2) + insn->imm;
+            ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+                DEBUG("c.ldsp (rd = %d, imm = %d) (dst = %lx)", insn->rd,
+                      insn->imm, xpr_val(insn->rd));
+                trace_load(insn->pc, effaddr, 8, {2}, insn->rd,
+                           xpr_val(insn->rd));
+            };
+        } break;
+        default:
+            UNKNOWN;
+        }
         break;
     default:
         UNKNOWN;
@@ -789,6 +827,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     assert(!info->system_emulation && "System emulation not supported");
 
     INFO("Target name: %s", info->target_name);
+    ctx.bits = strcmp(info->target_name, "riscv64") == 0 ? 64 : 32;
 
     // Register translation block and exit callbacks
     qemu_plugin_register_vcpu_init_cb(id, vcpu_init);
