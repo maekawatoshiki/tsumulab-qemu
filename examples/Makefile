@@ -19,7 +19,7 @@ format: #! Formats code
 run: fibo #! Run fibo
 	../build/qemu-riscv$(BITS) fibo
 
-run_trace: fibo trace_plugin #! Generate trace for fibo
+run_trace: format fibo trace_plugin #! Generate trace for fibo
 	../build/qemu-riscv$(BITS) -one-insn-per-tb -d plugin -plugin ./plugins/libtrace.so fibo
 
 trace_plugin: #! Build trace plugin

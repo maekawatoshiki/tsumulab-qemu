@@ -320,10 +320,77 @@ static void trace_compressed(const rv_decode *insn) {
 
 #define UNKNOWN                                                                \
     do {                                                                       \
-        ERR("insn: %016b, funct4: %04b, op: %02b\n", (int)insn->inst, funct4,  \
-            op);                                                               \
+        ERR("insn: %016b, funct4: %04b, op: %02b, qemuOp: %04d\n",             \
+            (int)insn->inst, funct4, op, insn->op);                            \
         assert(false && "Unknown opcode");                                     \
     } while (0)
+
+    switch (insn->op) {
+    // c.jr ra
+    case rv_op_ret:
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            assert(insn->rs1 == 1);
+            DEBUG("ret (pc = %lx, npc = %lx)", pc, npc);
+            trace_br(5, pc, true, npc, {/*ra=*/1}, {});
+        };
+        break;
+    case rv_op_mv:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DEBUG("mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs2, insn->rd,
+                  xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs2}, insn->rd, xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_ld: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        DEBUG("ld (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)", insn->rs1,
+              insn->rd, insn->imm, effaddr);
+        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
+                       xpr_val(insn->rd));
+        };
+    } break;
+    case rv_op_sd: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        DEBUG("sd (rs1 = %d, rs2 = %d, imm = %d) (effaddr = 0x%lx)", insn->rs1,
+              insn->rs2, insn->imm, effaddr);
+        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2});
+        };
+    } break;
+    case rv_op_addi:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DEBUG("addi (rd = %d, rs1 = %d, imm = %d) (dst = %lx)", insn->rd,
+                  insn->rs1, insn->imm, xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_add:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DEBUG("add (rd = %d, rs1 = %d, rs2 = %d) (dst = %lx)", insn->rd,
+                  insn->rs1, insn->rs2, xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                      xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_srli:
+    case rv_op_slli:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DEBUG("slli (rd = %d, rs1 = %d, imm = %d) (dst = %lx)", insn->rd,
+                  insn->rs1, insn->imm, xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
+        };
+        break;
+    default:
+        UNKNOWN;
+        break;
+    }
+
+    return;
+
+    // TODO: Old code below. Remove it later.
 
     switch (op & 0b11) {
     case 0b00:
