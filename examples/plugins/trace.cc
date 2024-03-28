@@ -379,12 +379,26 @@ static void trace_compressed(const rv_decode *insn) {
             trace_store(insn->pc, effaddr, size, {insn->rs1, insn->rs2});
         };
     } break;
+    case rv_op_flw:
+    case rv_op_fld: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+            DBG("fld (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)",
+                insn->rs1, insn->rd, insn->imm, effaddr);
+            int size = insn->op == rv_op_flw ? 4 : 8;
+            trace_load(insn->pc, effaddr, size, {insn->rs1}, insn->rd + 0x20u,
+                       fpr_val(insn->rd));
+        };
+    } break;
+    case rv_op_fsw:
     case rv_op_fsd: {
         const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
         ctx.pending_trace = [insn, effaddr](const rv_decode *) {
             DBG("fsd (rs1 = %d, rs2 = %d, imm = %d) (effaddr = 0x%lx)",
                 insn->rs1, insn->rs2 + 0x20u, insn->imm, effaddr);
-            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2 + 0x20u});
+            int size = insn->op == rv_op_fsw ? 4 : 8;
+            trace_store(insn->pc, effaddr, size,
+                        {insn->rs1, insn->rs2 + 0x20u});
         };
     } break;
     case rv_op_lui:
