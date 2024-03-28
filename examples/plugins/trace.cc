@@ -31,6 +31,24 @@
     fprintf(stderr, "[%s:%-4d] \033[1;34m[DEBUG]\033[0m " fmt "\n", __FILE__,  \
             __LINE__, ##__VA_ARGS__)
 
+enum InstClass : uint8_t {
+    aluInstClass = 0,                  // 演算
+    loadInstClass = 1,                 // ロード
+    storeInstClass = 2,                // ストア
+    condBranchInstClass = 3,           // 条件分岐
+    uncondDirectBranchInstClass = 4,   // 無条件絶対分岐
+    uncondIndirectBranchInstClass = 5, // 無条件相対分岐
+    fpInstClass = 6,                   // 浮動小数点命令
+    slowAluInstClass = 7,              // 遅い演算
+    undefInstClass = 8,                // 未定義
+    jalClass = 9,                      // 関数呼び出し
+    retClass = 10,                     // 関数復帰
+    csrInstClass = 11,                 // csr命令
+    sretClass = 12,                    // sret命令
+    amoInstClass = 13,                 // アトミック命令
+                                       //（lr.w sc.w 以外）
+};
+
 class Ctx {
   public:
     Ctx() {
@@ -162,7 +180,7 @@ static void trace_amo(const uint64_t pc, uint64_t effective_addr,
                       const uint8_t access_size,
                       const std::vector<uint64_t> &input_regs, const uint8_t rd,
                       const uint64_t val) {
-    uint8_t inst_type = 0xd; // amoInstClass
+    uint8_t inst_type = amoInstClass;
     uint8_t num_input_regs = input_regs.size();
     uint8_t num_output_regs = 1;
     ctx.write(pc);
@@ -324,63 +342,138 @@ static void trace_compressed(const rv_decode *insn) {
             (int)insn->inst, funct4, op, insn->op);                            \
         assert(false && "Unknown opcode");                                     \
     } while (0)
+    // #define DBG(fmt, ...) DEBUG(fmt, ##__VA_ARGS__)
+#define DBG(fmt, ...)                                                          \
+    do {                                                                       \
+    } while (0)
 
     switch (insn->op) {
-    // c.jr ra
+    case rv_op_nop:
+        // TODO: How to handle nop?
+        break;
+    case rv_op_mv:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DBG("mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs2, insn->rd,
+                xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs2}, insn->rd, xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_lw:
+    case rv_op_ld: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        DBG("ld (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)", insn->rs1,
+            insn->rd, insn->imm, effaddr);
+        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+            int size = insn->op == rv_op_lw ? 4 : 8;
+            trace_load(insn->pc, effaddr, size, {insn->rs1}, insn->rd,
+                       xpr_val(insn->rd));
+        };
+    } break;
+    case rv_op_sw:
+    case rv_op_sd: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        DBG("sd (rs1 = %d, rs2 = %d, imm = %d) (effaddr = 0x%lx)", insn->rs1,
+            insn->rs2, insn->imm, effaddr);
+        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+            int size = insn->op == rv_op_sw ? 4 : 8;
+            trace_store(insn->pc, effaddr, size, {insn->rs1, insn->rs2});
+        };
+    } break;
+    case rv_op_fsd: {
+        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
+        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
+            DBG("fsd (rs1 = %d, rs2 = %d, imm = %d) (effaddr = 0x%lx)",
+                insn->rs1, insn->rs2 + 0x20u, insn->imm, effaddr);
+            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2 + 0x20u});
+        };
+    } break;
+    case rv_op_lui:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DBG("lui (rd = %d, imm = %d) (dst = %lx)", insn->rd, insn->imm,
+                xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_sext_w:
+    case rv_op_addiw:
+    case rv_op_addi:
+    case rv_op_andi:
+    case rv_op_srai:
+    case rv_op_srli:
+    case rv_op_slli:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DBG("addi (rd = %d, rs1 = %d, imm = %d) (dst = %lx)", insn->rd,
+                insn->rs1, insn->imm, xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_add:
+    case rv_op_addw:
+    case rv_op_sub:
+    case rv_op_subw:
+    case rv_op_and:
+    case rv_op_or:
+    case rv_op_xor:
+        ctx.pending_trace = [insn](const rv_decode *) {
+            DBG("add (rd = %d, rs1 = %d, rs2 = %d) (dst = %lx)", insn->rd,
+                insn->rs1, insn->rs2, xpr_val(insn->rd));
+            trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
+                      xpr_val(insn->rd));
+        };
+        break;
+    case rv_op_bnez:
+    case rv_op_beqz:
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            const auto taken =
+                pc + 2 != npc; // TODO: Not sure if this is correct
+            DBG("bnez (rs1 = %d, imm = %d) (pc = %lx, npc = %lx) (taken = %d)",
+                insn->rs1, insn->imm, pc, npc, taken);
+            trace_br(condBranchInstClass, pc, taken, npc, {insn->rs1}, {});
+        };
+        break;
+    case rv_op_j:
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            DBG("j (imm = %d) (pc = %lx, npc = %lx)", insn->imm, pc, npc);
+            trace_br(uncondDirectBranchInstClass, pc, true, npc, {}, {});
+        };
+        break;
+    case rv_op_jr:
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            DBG("jr (rs1 = %d) (pc = %lx, npc = %lx)", insn->rs1, pc, npc);
+            trace_br(uncondIndirectBranchInstClass, pc, true, npc, {insn->rs1},
+                     {});
+        };
+        break;
+    case rv_op_jalr:
+        ctx.pending_trace = [insn](const rv_decode *next_insn) {
+            const auto pc = insn->pc;
+            const auto npc = next_insn->pc;
+            assert(!(insn->rd == 0 && insn->rs1 == 1 && insn->imm == 0) &&
+                   "Must not be ret");
+            DBG("jalr (rs1 = %d, rd = %d) (pc = %lx, npc = %lx)", insn->rs1,
+                insn->rd, pc, npc);
+            if (insn->rd == /*ra=*/1) {
+                trace_br(jalClass, pc, true, npc, {insn->rs1},
+                         {{insn->rd, pc + 2}});
+            } else {
+                trace_br(uncondIndirectBranchInstClass, pc, true, npc,
+                         {insn->rs1}, {{insn->rd, pc + 2}});
+            }
+        };
+        break;
     case rv_op_ret:
         ctx.pending_trace = [insn](const rv_decode *next_insn) {
             const auto pc = insn->pc;
             const auto npc = next_insn->pc;
             assert(insn->rs1 == 1);
-            DEBUG("ret (pc = %lx, npc = %lx)", pc, npc);
-            trace_br(5, pc, true, npc, {/*ra=*/1}, {});
-        };
-        break;
-    case rv_op_mv:
-        ctx.pending_trace = [insn](const rv_decode *) {
-            DEBUG("mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs2, insn->rd,
-                  xpr_val(insn->rd));
-            trace_alu(0, insn->pc, {insn->rs2}, insn->rd, xpr_val(insn->rd));
-        };
-        break;
-    case rv_op_ld: {
-        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
-        DEBUG("ld (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)", insn->rs1,
-              insn->rd, insn->imm, effaddr);
-        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
-            trace_load(insn->pc, effaddr, 8, {insn->rs1}, insn->rd,
-                       xpr_val(insn->rd));
-        };
-    } break;
-    case rv_op_sd: {
-        const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
-        DEBUG("sd (rs1 = %d, rs2 = %d, imm = %d) (effaddr = 0x%lx)", insn->rs1,
-              insn->rs2, insn->imm, effaddr);
-        ctx.pending_trace = [insn, effaddr](const rv_decode *) {
-            trace_store(insn->pc, effaddr, 8, {insn->rs1, insn->rs2});
-        };
-    } break;
-    case rv_op_addi:
-        ctx.pending_trace = [insn](const rv_decode *) {
-            DEBUG("addi (rd = %d, rs1 = %d, imm = %d) (dst = %lx)", insn->rd,
-                  insn->rs1, insn->imm, xpr_val(insn->rd));
-            trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
-        };
-        break;
-    case rv_op_add:
-        ctx.pending_trace = [insn](const rv_decode *) {
-            DEBUG("add (rd = %d, rs1 = %d, rs2 = %d) (dst = %lx)", insn->rd,
-                  insn->rs1, insn->rs2, xpr_val(insn->rd));
-            trace_alu(0, insn->pc, {insn->rs1, insn->rs2}, insn->rd,
-                      xpr_val(insn->rd));
-        };
-        break;
-    case rv_op_srli:
-    case rv_op_slli:
-        ctx.pending_trace = [insn](const rv_decode *) {
-            DEBUG("slli (rd = %d, rs1 = %d, imm = %d) (dst = %lx)", insn->rd,
-                  insn->rs1, insn->imm, xpr_val(insn->rd));
-            trace_alu(0, insn->pc, {insn->rs1}, insn->rd, xpr_val(insn->rd));
+            DBG("ret (pc = %lx, npc = %lx)", pc, npc);
+            trace_br(retClass, pc, true, npc, {/*ra=*/1}, {});
         };
         break;
     default:
@@ -397,15 +490,15 @@ static void trace_compressed(const rv_decode *insn) {
         switch (funct3) {
         case 0x000: // c.addi4spn
             ctx.pending_trace = [insn](const rv_decode *) {
-                DEBUG("c.addi4spn (rd = %d, imm = %d) (dst = %lx)", insn->rd,
-                      insn->imm, xpr_val(insn->rd));
+                DBG("c.addi4spn (rd = %d, imm = %d) (dst = %lx)", insn->rd,
+                    insn->imm, xpr_val(insn->rd));
                 trace_alu(0, insn->pc, {2}, insn->rd, xpr_val(insn->rd));
             };
             break;
         case 0b010: { // c.lw
             const uint64_t effaddr = xpr_val(insn->rs1) + insn->imm;
-            DEBUG("c.lw (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)",
-                  insn->rs1, insn->rd, insn->imm, effaddr);
+            DBG("c.lw (rs1 = %d, rd = %d, imm = %d) (effaddr = 0x%lx)",
+                insn->rs1, insn->rd, insn->imm, effaddr);
             ctx.pending_trace = [insn, effaddr](const rv_decode *) {
                 trace_load(insn->pc, effaddr, 4, {insn->rs1}, insn->rd,
                            xpr_val(insn->rd));
@@ -422,8 +515,8 @@ static void trace_compressed(const rv_decode *insn) {
         case 0b0100:
         case 0b0101:
             ctx.pending_trace = [insn](const rv_decode *) {
-                DEBUG("c.li (rd = %d, imm = %d) (dst = %lx)", insn->rd,
-                      insn->imm, xpr_val(insn->rd));
+                DBG("c.li (rd = %d, imm = %d) (dst = %lx)", insn->rd, insn->imm,
+                    xpr_val(insn->rd));
                 trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
             };
             break;
@@ -432,8 +525,8 @@ static void trace_compressed(const rv_decode *insn) {
             if ((insn->inst & 0b000'0'11111'00000'00) >> 7 == 2) {
                 // c.addi16sp
                 ctx.pending_trace = [insn](const rv_decode *) {
-                    DEBUG("c.addi16sp (rd = %d, imm = %d) (dst = %lx)",
-                          insn->rd, insn->imm, xpr_val(insn->rd));
+                    DBG("c.addi16sp (rd = %d, imm = %d) (dst = %lx)", insn->rd,
+                        insn->imm, xpr_val(insn->rd));
                     trace_alu(0, insn->pc, {2}, insn->rd, xpr_val(insn->rd));
                 };
             } else {
@@ -452,15 +545,15 @@ static void trace_compressed(const rv_decode *insn) {
                 ctx.pending_trace = [insn](const rv_decode *next_insn) {
                     const auto pc = insn->pc;
                     const auto npc = next_insn->pc;
-                    DEBUG("c.jr (rs1 = %d) (pc = %lx, npc = %lx)", insn->rs1,
-                          pc, npc);
+                    DBG("c.jr (rs1 = %d) (pc = %lx, npc = %lx)", insn->rs1, pc,
+                        npc);
                     trace_br(5, pc, true, npc, {insn->rs1}, {});
                 };
             } else {
                 // c.mv
                 ctx.pending_trace = [insn](const rv_decode *) {
-                    DEBUG("c.mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs2,
-                          insn->rd, xpr_val(insn->rd));
+                    DBG("c.mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs2,
+                        insn->rd, xpr_val(insn->rd));
                     trace_alu(0, insn->pc, {insn->rs2}, insn->rd,
                               xpr_val(insn->rd));
                 };
@@ -472,8 +565,8 @@ static void trace_compressed(const rv_decode *insn) {
             assert(ctx.bits == 64);
             const uint64_t effaddr = xpr_val(2) + insn->imm;
             ctx.pending_trace = [insn, effaddr](const rv_decode *) {
-                DEBUG("c.ldsp (rd = %d, imm = %d) (dst = %lx)", insn->rd,
-                      insn->imm, xpr_val(insn->rd));
+                DBG("c.ldsp (rd = %d, imm = %d) (dst = %lx)", insn->rd,
+                    insn->imm, xpr_val(insn->rd));
                 trace_load(insn->pc, effaddr, 8, {2}, insn->rd,
                            xpr_val(insn->rd));
             };
@@ -487,17 +580,17 @@ static void trace_compressed(const rv_decode *insn) {
     }
 
 #undef UNKNOWN
+#undef DBG
 }
 
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     (void)(cpu_index);
     const rv_decode *insn = (rv_decode *)udata;
     const bool is_compressed = (insn->inst & 0b11) != 0b11;
-    assert(!is_compressed && "C extension is not yet supported");
 
     if (insn->pc == ctx.entry_addr) {
-        const uint64_t opcode = ctx.prev_insn->inst & 0x7f;
-        assert((opcode == 0x6f || opcode == 0x67) &&
+        assert((ctx.prev_insn->op == rv_op_jal ||
+                ctx.prev_insn->op == rv_op_jalr) &&
                "Entry address must be reached by call instruction");
         ctx.trace_enabled = true;
         ctx.exit_addr = ctx.prev_insn->pc + 4;
