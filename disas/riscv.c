@@ -27,6 +27,8 @@
 #include "disas/riscv-xthead.h"
 #include "disas/riscv-xventana.h"
 
+#if 0
+
 typedef enum {
     /* 0 is reserved for rv_op_illegal. */
     rv_op_lui = 1,
@@ -907,6 +909,8 @@ typedef enum {
     rv_op_amocas_d = 876,
     rv_op_amocas_q = 877,
 } rv_op;
+
+#endif
 
 /* register names */
 
