@@ -350,7 +350,32 @@ static void trace_compressed(const rv_decode *insn) {
         }
         break;
     case 0b01:
-        UNKNOWN;
+        switch (funct4) {
+        // c.li
+        case 0b0100:
+        case 0b0101:
+            ctx.pending_trace = [insn](const rv_decode *) {
+                DEBUG("c.li (rd = %d, imm = %d) (dst = %lx)", insn->rd,
+                      insn->imm, xpr_val(insn->rd));
+                trace_alu(0, insn->pc, {}, insn->rd, xpr_val(insn->rd));
+            };
+            break;
+        case 0b0110:
+        case 0b0111:
+            if ((insn->inst & 0b000'0'11111'00000'00) >> 7 == 2) {
+                // c.addi16sp
+                ctx.pending_trace = [insn](const rv_decode *) {
+                    DEBUG("c.addi16sp (rd = %d, imm = %d) (dst = %lx)",
+                          insn->rd, insn->imm, xpr_val(insn->rd));
+                    trace_alu(0, insn->pc, {2}, insn->rd, xpr_val(insn->rd));
+                };
+            } else {
+                UNKNOWN;
+            }
+            break;
+        default:
+            UNKNOWN;
+        }
         break;
     case 0b10:
         switch (funct4) {
@@ -367,10 +392,9 @@ static void trace_compressed(const rv_decode *insn) {
             } else {
                 // c.mv
                 ctx.pending_trace = [insn](const rv_decode *) {
-                    DEBUG("c.mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs1,
+                    DEBUG("c.mv (rs2 = %d, rd = %d) (dst = %lx)", insn->rs2,
                           insn->rd, xpr_val(insn->rd));
-                    // BUG: rs2 should be used instead of rs1
-                    trace_alu(0, insn->pc, {insn->rs1}, insn->rd,
+                    trace_alu(0, insn->pc, {insn->rs2}, insn->rd,
                               xpr_val(insn->rd));
                 };
             }
