@@ -4309,8 +4309,8 @@ static void decode_inst_operands(rv_decode *dec, rv_isa isa)
         break;
     case rv_codec_cr_mv:
         dec->rd = operand_crd(inst);
-        dec->rs1 = operand_crs2(inst);
-        dec->rs2 = rv_ireg_zero;
+        dec->rs1 = rv_ireg_zero;
+        dec->rs2 = operand_crs2(inst);
         dec->imm = 0;
         break;
     case rv_codec_cr_jalr:
