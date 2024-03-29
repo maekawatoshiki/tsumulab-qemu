@@ -464,6 +464,7 @@ static void trace_compressed(const rv_decode *insn) {
                      {});
         };
         break;
+    case rv_op_jal:
     case rv_op_jalr:
         ctx.pending_trace = [insn](const rv_decode *next_insn) {
             const auto pc = insn->pc;
