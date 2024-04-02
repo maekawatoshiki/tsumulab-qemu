@@ -531,3 +531,8 @@ uint64_t qemu_plugin_u64_sum(qemu_plugin_u64 entry)
     }
     return total;
 }
+
+int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len)
+{
+    return gdb_read_mem(current_cpu, addr, buf, len);
+}

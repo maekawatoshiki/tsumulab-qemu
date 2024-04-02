@@ -51,4 +51,7 @@
   qemu_plugin_u64_sum;
   qemu_plugin_uninstall;
   qemu_plugin_vcpu_for_each;
+  qemu_plugin_get_register_files;
+  qemu_plugin_read_register;
+  qemu_plugin_read_memory;
 };

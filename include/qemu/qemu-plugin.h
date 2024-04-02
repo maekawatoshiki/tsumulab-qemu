@@ -841,4 +841,15 @@ void qemu_plugin_u64_set(qemu_plugin_u64 entry, unsigned int vcpu_index,
 QEMU_PLUGIN_API
 uint64_t qemu_plugin_u64_sum(qemu_plugin_u64 entry);
 
+/**
+ * qemu_plugin_read_memory() - read memory value
+ * @buf: buffer to read into
+ * @addr: address to read from
+ * @len: number of bytes to read
+ *
+ * Returns 0 on success, -1 on failure.
+ */
+QEMU_PLUGIN_API
+int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len);
+
 #endif /* QEMU_QEMU_PLUGIN_H */
