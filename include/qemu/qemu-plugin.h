@@ -729,6 +729,9 @@ qemu_plugin_get_register_files(unsigned int vcpu_index, int *size);
  */
 int qemu_plugin_read_register(GByteArray *buf, int reg);
 
+// qemu_plugin_read_memory() - read memory
+int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len);
+
 G_END_DECLS
 
 #endif /* QEMU_QEMU_PLUGIN_H */

@@ -488,3 +488,8 @@ int qemu_plugin_read_register(GByteArray *buf, int reg)
 {
     return gdb_read_register(current_cpu, buf, reg, true);
 }
+
+int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len)
+{
+    return gdb_read_mem(current_cpu, addr, buf, len);
+}

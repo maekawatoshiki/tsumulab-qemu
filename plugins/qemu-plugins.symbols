@@ -45,4 +45,5 @@
   qemu_plugin_vcpu_for_each;
   qemu_plugin_get_register_files;
   qemu_plugin_read_register;
+  qemu_plugin_read_memory;
 };

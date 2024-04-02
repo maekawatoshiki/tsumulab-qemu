@@ -1202,6 +1202,11 @@ static void handle_write_all_regs(GArray *params, void *user_ctx)
     gdb_put_packet("OK");
 }
 
+int gdb_read_mem(CPUState *cpu, uint64_t addr, uint8_t *buf, size_t len)
+{
+    return gdb_target_memory_rw_debug(cpu, addr, buf, len, false);
+}
+
 static void handle_read_all_regs(GArray *params, void *user_ctx)
 {
     int reg_id;
