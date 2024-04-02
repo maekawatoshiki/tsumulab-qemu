@@ -493,3 +493,8 @@ int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len)
 {
     return gdb_read_mem(current_cpu, addr, buf, len);
 }
+
+int qemu_plugin_walk_memory_regions(void *priv, walk_memory_regions_generic_fn fn)
+{
+    return walk_memory_regions_generic(priv, fn);
+}

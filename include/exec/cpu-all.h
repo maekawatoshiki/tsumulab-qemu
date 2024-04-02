@@ -219,6 +219,9 @@ typedef int (*walk_memory_regions_fn)(void *, target_ulong,
                                       target_ulong, unsigned long);
 int walk_memory_regions(void *, walk_memory_regions_fn);
 
+typedef int (*walk_memory_regions_generic_fn)(void *, uint64_t, uint64_t, unsigned long);
+int walk_memory_regions_generic(void *, walk_memory_regions_generic_fn);
+
 int page_get_flags(target_ulong address);
 void page_set_flags(target_ulong start, target_ulong last, int flags);
 void page_reset_target_data(target_ulong start, target_ulong last);

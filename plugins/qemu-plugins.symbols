@@ -46,4 +46,5 @@
   qemu_plugin_get_register_files;
   qemu_plugin_read_register;
   qemu_plugin_read_memory;
+  qemu_plugin_walk_memory_regions;
 };

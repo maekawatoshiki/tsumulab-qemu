@@ -732,6 +732,11 @@ int qemu_plugin_read_register(GByteArray *buf, int reg);
 // qemu_plugin_read_memory() - read memory
 int qemu_plugin_read_memory(uint8_t *buf, uint64_t addr, int len);
 
+// qemu_plugin_walk_memory_regions() - walk memory regions
+typedef int (*walk_memory_regions_generic_fn)(void *, uint64_t,
+                                      uint64_t, unsigned long);
+int qemu_plugin_walk_memory_regions(void *, walk_memory_regions_generic_fn);
+
 G_END_DECLS
 
 #endif /* QEMU_QEMU_PLUGIN_H */

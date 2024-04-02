@@ -182,6 +182,27 @@ int walk_memory_regions(void *priv, walk_memory_regions_fn fn)
     return rc;
 }
 
+int walk_memory_regions_generic(void *priv, walk_memory_regions_generic_fn fn)
+{
+    IntervalTreeNode *n;
+    int rc = 0;
+
+    mmap_lock();
+    for (n = interval_tree_iter_first(&pageflags_root, 0, -1);
+         n != NULL;
+         n = interval_tree_iter_next(n, 0, -1)) {
+        PageFlagsNode *p = container_of(n, PageFlagsNode, itree);
+
+        rc = fn(priv, n->start, n->last + 1, p->flags);
+        if (rc != 0) {
+            break;
+        }
+    }
+    mmap_unlock();
+
+    return rc;
+}
+
 static int dump_region(void *priv, target_ulong start,
                        target_ulong end, unsigned long prot)
 {
