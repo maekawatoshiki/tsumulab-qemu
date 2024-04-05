@@ -19,11 +19,17 @@ format: #! Formats code
 run: fibo #! Run fibo
 	../build/qemu-riscv$(BITS) fibo
 
-run_trace: format fibo trace_plugin #! Generate trace for fibo
+run_trace: format fibo cvp_trace_plugin #! Generate trace for fibo
 	../build/qemu-riscv$(BITS) -one-insn-per-tb -d plugin -plugin ./plugins/libtrace.so fibo
 
-trace_plugin: #! Build trace plugin
+run_ecs_trace: format fibo ecs_trace_plugin #! Generate trace for fibo
+	../build/qemu-riscv$(BITS) -one-insn-per-tb -d plugin -plugin ./plugins/libecstrace.so fibo
+
+cvp_trace_plugin: #! Build trace plugin
 	make libtrace.so -C ./plugins
+
+ecs_trace_plugin: #! Build trace plugin
+	make libecstrace.so -C ./plugins
 
 clean: #! Remove generated binaries
 	rm -f fibo
