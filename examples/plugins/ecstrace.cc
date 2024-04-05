@@ -13,6 +13,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -53,11 +54,11 @@ struct InputOp {
 struct InputOpV2 { // 80 Bytes
     u64 ip;
     u64 next_ip;
-    u8 reservedA[4];
+    u8 reservedA[4] = {};
     u32 instruction_word;
     u8 logical_src_reg[4];
     u8 logical_dst_reg[2];
-    u8 reservedB[2];
+    u8 reservedB[2] = {};
     u64 src_value[4];
     u64 dst_value[2];
     u64 imm;
@@ -65,23 +66,18 @@ struct InputOpV2 { // 80 Bytes
     u64 mem_src_value;
     u64 mem_dst_value;
 
-    InputOpV2(u64 ip, u64 next_ip, u32 instruction_word, u8 src_reg[4],
-              u8 dst_reg[2], u64 src_val[4], u64 dst_val[2], u64 imm,
-              u64 mem_addr, u64 mem_src_val, u64 mem_dst_val) {
-        this->ip = ip;
-        this->next_ip = next_ip;
-        this->instruction_word = instruction_word;
-        this->imm = imm;
-        this->mem_addr = mem_addr;
-        this->mem_src_value = mem_src_val;
-        this->mem_dst_value = mem_dst_val;
+    InputOpV2(u64 ip, u64 next_ip, u32 instruction_word,
+              std::array<u8, 4> src_reg, std::array<u8, 2> dst_reg,
+              std::array<u64, 4> src_val, std::array<u64, 2> dst_val, u64 imm,
+              u64 mem_addr, u64 mem_src_val, u64 mem_dst_val)
+        : ip(ip), next_ip(next_ip), instruction_word(instruction_word),
+          imm(imm), mem_addr(mem_addr), mem_src_value(mem_src_val),
+          mem_dst_value(mem_dst_val) {
         for (int i = 0; i < 4; i++) {
-            this->mem_src_value = src_val[i];
             this->logical_src_reg[i] = src_reg[i];
             this->src_value[i] = src_val[i];
         }
         for (int i = 0; i < 2; i++) {
-            this->mem_dst_value = dst_val[i];
             this->logical_dst_reg[i] = dst_reg[i];
             this->dst_value[i] = dst_val[i];
         }
@@ -99,6 +95,7 @@ class Ctx {
         this->trace_file.open(trace_path ? trace_path : "output.trace",
                               std::ios::binary);
         assert(this->trace_file.is_open());
+        this->trace_file.write("RISC-V trace 0.0", 16);
 
         const auto entry_addr_str = std::getenv("TRACE_MAIN_ENTRY_ADDR");
         if (entry_addr_str) {
@@ -206,7 +203,7 @@ static uint64_t csr_val(const uint8_t reg) {
     return ret;
 }
 
-static int64_t xpr_val(const uint8_t reg) {
+static uint64_t xpr_val(const uint8_t reg) {
     assert(reg <= 0x20); // 0x20 for pc
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
     int64_t ret;
@@ -222,7 +219,7 @@ static int64_t xpr_val(const uint8_t reg) {
         assert(false && "XPR must be 32 or 64 bits");
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
-    return ret;
+    return (uint64_t)ret;
 }
 
 static uint64_t fpr_val(const uint8_t reg) {
@@ -245,6 +242,17 @@ static uint64_t fpr_val(const uint8_t reg) {
     return ret;
 }
 
+static u64 reg_val(const uint8_t reg) {
+    // 0~31: XPR, 32~63: FPR, 64: PC
+    assert(reg < 64);
+    if (reg < 32)
+        return xpr_val(reg);
+    else if (reg == 64)
+        return xpr_val(32);
+    else
+        return fpr_val(reg - 32);
+}
+
 static void dump_register_file() {
     if (!ctx.reg_state_file.is_open())
         return;
@@ -252,12 +260,12 @@ static void dump_register_file() {
     const char header[16 + 1] = "RISC-V reg   0.0";
     ctx.reg_state_file.write((const char *)&header, 16);
 
-    const int64_t pc = xpr_val(/*pc=*/32);
+    const uint64_t pc = xpr_val(/*pc=*/32);
     ctx.reg_state_file.write((const char *)&pc, sizeof(pc));
 
     // XPR 32 registers
     for (int i = 0; i < 32; i++) {
-        int64_t val = xpr_val(i);
+        uint64_t val = xpr_val(i);
         ctx.reg_state_file.write((const char *)&val, sizeof(val));
     }
     // FPR 32 registers
@@ -346,8 +354,12 @@ static void dump_state() {
     ctx.reg_state_file.close();
 }
 
-static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
-    (void)(cpu_index);
+static void vcpu_insn_exec(unsigned int, void *udata) {
+    // #define DBG(fmt, ...) DEBUG(fmt, ##__VA_ARGS__)
+#define DBG(fmt, ...)                                                          \
+    do {                                                                       \
+    } while (0)
+
     const rv_decode *insn = (rv_decode *)udata;
     const bool is_compressed = (insn->inst & 0b11) != 0b11;
 
@@ -379,102 +391,85 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     if (ctx.num_insns_from_entry++ < ctx.skip_first_n_insns_from_entry)
         return;
 
-#if 0
-DEBUG("opcode = 0x%lx", insn->inst);
-#endif
-
     if (is_compressed) {
         ERR("Compressed instruction is not supported");
         assert(false && "Compressed instruction is not supported");
     }
 
-    const uint64_t opcode = insn->inst & 0x7f;
-
     assert((insn->codec != rv_codec_r2_immhl &&
             insn->codec != rv_codec_r2_imm2_imm5) &&
            "insn->imm1 must be zero");
 
-// #define DBG(fmt, ...) DEBUG(fmt, ##__VA_ARGS__)
-#define DBG(fmt, ...)                                                          \
-    do {                                                                       \
-    } while (0)
+    u8 rdoff = 0, rs1off = 0, rs2off = 0, rs3off = 0;
+    u64 mem_addr = 0, mem_dst_val = 0;
+    bool need_mem_src_val = false;
 
-    switch (opcode) {
-    case 0b0110011: // ALU64
-    case 0b0011011: // ALU32Imm
-    case 0b0010011: // ALU64Imm
-    case 0b0110111: // LUi
-    case 0b0010111: // AUiPC
-        ctx.pending_trace = [insn](const rv_decode *) {
-            u64 dst = xpr_val(insn->rd);
-            // InputOpV2 op(insn->pc, insn->pc + 4, (uint32_t)insn->inst,
-            // insn->rd,
-            //              insn->rs1, insn->rs2, false, (u64)insn->imm, dst,
-            //              0);
-            // ctx.write(op);
-        };
+    switch (insn->inst & 0x7f) {
+    case 0x37: // LUI
+    case 0x17: // AUIPC
         break;
-    case 0b1101111: // JAL
-    case 0b1100111: // JALR
-    case 0b1100011: // BRcc
-        ctx.pending_trace = [insn](const rv_decode *next_insn) {
-            const auto pc = insn->pc;
-            const auto npc = next_insn->pc;
-            const auto taken = pc + 4 != npc;
-            u64 dst = xpr_val(insn->rd);
-            InputOp op = {
-                insn->pc, (uint32_t)insn->inst, insn->rd, insn->rs1, insn->rs2,
-                false,    (u64)insn->imm,       dst,      0};
-            DBG("Branch: rd = %d, rs1 = %d, rs2 = %d, imm = 0x%x", insn->rd,
-                insn->rs1, insn->rs2, insn->imm);
-            ctx.write(op);
-        };
+    case 0x1b: // IntALU(rd,rs1,imm) (e.g., slliw in RV64I)
+    case 0x13:
+        break;
+    case 0x33:
+    case 0x3b: // (e.g., addw in RV64I)
+        break;
+    case 0b0000011: // Load
+        mem_addr = reg_val(insn->rs1) + insn->imm;
+        need_mem_src_val = true;
         break;
     case 0b0100011: // Store
+        mem_addr = reg_val(insn->rs1) + insn->imm;
+        mem_dst_val = xpr_val(insn->rs2);
+        break;
+    case 0b0000111: // FpLoad
+        rdoff = 32;
+        mem_addr = reg_val(insn->rs1) + insn->imm;
+        need_mem_src_val = true;
+        break;
+    case 0b0100111: // FpStore
+        rs2off = 32;
+        mem_addr = reg_val(insn->rs1) + insn->imm;
+        mem_dst_val = fpr_val(insn->rs2);
+        break;
+    case 0b1010011: // FpInst
     {
-        u64 addr = xpr_val(insn->rs1) + insn->imm;
-        ctx.pending_trace = [insn, addr](const rv_decode *) {
-            InputOp op = {
-                insn->pc, (uint32_t)insn->inst, insn->rd, insn->rs1, insn->rs2,
-                false,    (u64)insn->imm,       0,        addr};
-            DBG("Store: rd = %d, rs1 = %d, rs2 = %d, imm = 0x%x, addr = "
-                "0x%lx, val = 0x%lx",
-                insn->rd, insn->rs1, insn->rs2, insn->imm, addr,
-                xpr_val(insn->rd));
-            ctx.write(op);
-        };
-    } break;
-    case 0b0000011: // Load
-    {
-        u64 addr = xpr_val(insn->rs1) + insn->imm;
-        DBG("Load: rs1 val = 0x%lx, imm = 0x%x, addr = 0x%lx",
-            xpr_val(insn->rs1), insn->imm, addr);
-        ctx.pending_trace = [insn, addr](const rv_decode *) {
-            InputOp op = {insn->pc,
-                          (uint32_t)insn->inst,
-                          insn->rd,
-                          insn->rs1,
-                          insn->rs2,
-                          false,
-                          (u64)insn->imm,
-                          (u64)xpr_val(insn->rd),
-                          addr};
-            DBG("Load: rd = %d, rs1 = %d, rs2 = %d, imm = 0x%x, addr = 0x%lx",
-                insn->rd, insn->rs1, insn->rs2, insn->imm, addr);
-            ctx.write(op);
-        };
-    } break;
-    default:
-        ctx.pending_trace = [insn](const rv_decode *) {
-            InputOp op = {
-                insn->pc, (uint32_t)insn->inst, insn->rd, insn->rs1, insn->rs2,
-                false,    (u64)insn->imm,       0,        0};
-            DBG("Unknown: rd = %d, rs1 = %d, rs2 = %d, imm = 0x%x", insn->rd,
-                insn->rs1, insn->rs2, insn->imm);
-            ctx.write(op);
-        };
+        const uint64_t alutype = (insn->inst >> 25) & 0x7f;
+        if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
+            alutype == 0x22) {
+            rs1off = rdoff = 32; // rs1:f,rd:f
+        } else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
+                   alutype == 0x71) {
+            rs1off = 32; // rs1:f,rd:x
+        } else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
+                   alutype == 0x21) {
+            rdoff = 32; // rs1:x,rd:f
+        } else if (alutype <= 0x3f) {
+            rs1off = rs2off = rdoff = 32; // rs1:f,rs2:f,rd:f (arith)
+        } else if (alutype >= 0x40) {
+            rs1off = rs2off = 32; // rs1:f,rs2:f,rd:x (cmp)
+        } else {
+            ERR("Unknown alutype: 0x%lx", alutype);
+            assert(false && "Unknown opcode");
+        }
         break;
     }
+    }
+
+    ctx.pending_trace = [=](const rv_decode *next_insn) {
+        const auto pc = insn->pc;
+        const auto npc = next_insn->pc;
+        u8 rd = insn->rd + rdoff, rs1 = insn->rs1 + rs1off,
+           rs2 = insn->rs2 + rs2off, rs3 = insn->rs3 + rs3off;
+        DBG("OP: rd = %d, rs1 = %d, rs2 = %d, r3 = %d, imm = 0x%x %d", rd, rs1,
+            rs2, rs3, insn->imm, insn->op);
+        u64 dst = reg_val(rd);
+        u64 mem_src_val = need_mem_src_val ? dst : 0;
+        InputOpV2 op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
+                     {reg_val(rs1), reg_val(rs2), reg_val(rs3), 0}, {dst, 0},
+                     (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
+        ctx.write(op);
+    };
 
 #undef DBG
 }

@@ -3256,6 +3256,7 @@ static void decode_inst_operands(rv_decode *dec, rv_isa isa)
     const rv_opcode_data *opcode_data = dec->opcode_data;
     rv_inst inst = dec->inst;
     dec->codec = opcode_data[dec->op].codec;
+    dec->rd = dec->rs1 = dec->rs2 = dec->rs3 = rv_ireg_zero;
     switch (dec->codec) {
     case rv_codec_none:
         dec->rd = dec->rs1 = dec->rs2 = rv_ireg_zero;
