@@ -400,7 +400,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             insn->codec != rv_codec_r2_imm2_imm5) &&
            "insn->imm1 must be zero");
 
-    u8 rdoff = 0, rs1off = 0, rs2off = 0, rs3off = 0;
+    u8 off_rd = 0, off_rs1 = 0, off_rs2 = 0, off_rs3 = 0;
     u64 mem_addr = 0, mem_dst_val = 0;
     bool need_mem_src_val = false;
 
@@ -423,12 +423,12 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         mem_dst_val = xpr_val(insn->rs2);
         break;
     case 0b0000111: // FpLoad
-        rdoff = 32;
+        off_rd = 32;
         mem_addr = reg_val(insn->rs1) + insn->imm;
         need_mem_src_val = true;
         break;
     case 0b0100111: // FpStore
-        rs2off = 32;
+        off_rs2 = 32;
         mem_addr = reg_val(insn->rs1) + insn->imm;
         mem_dst_val = fpr_val(insn->rs2);
         break;
@@ -437,17 +437,17 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         const uint64_t alutype = (insn->inst >> 25) & 0x7f;
         if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
             alutype == 0x22) {
-            rs1off = rdoff = 32; // rs1:f,rd:f
+            off_rs1 = off_rd = 32; // rs1:f,rd:f
         } else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
                    alutype == 0x71) {
-            rs1off = 32; // rs1:f,rd:x
+            off_rs1 = 32; // rs1:f,rd:x
         } else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
                    alutype == 0x21) {
-            rdoff = 32; // rs1:x,rd:f
+            off_rd = 32; // rs1:x,rd:f
         } else if (alutype <= 0x3f) {
-            rs1off = rs2off = rdoff = 32; // rs1:f,rs2:f,rd:f (arith)
+            off_rs1 = off_rs2 = off_rd = 32; // rs1:f,rs2:f,rd:f (arith)
         } else if (alutype >= 0x40) {
-            rs1off = rs2off = 32; // rs1:f,rs2:f,rd:x (cmp)
+            off_rs1 = off_rs2 = 32; // rs1:f,rs2:f,rd:x (cmp)
         } else {
             ERR("Unknown alutype: 0x%lx", alutype);
             assert(false && "Unknown opcode");
@@ -459,8 +459,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     ctx.pending_trace = [=](const rv_decode *next_insn) {
         const auto pc = insn->pc;
         const auto npc = next_insn->pc;
-        u8 rd = insn->rd + rdoff, rs1 = insn->rs1 + rs1off,
-           rs2 = insn->rs2 + rs2off, rs3 = insn->rs3 + rs3off;
+        u8 rd = insn->rd + off_rd, rs1 = insn->rs1 + off_rs1,
+           rs2 = insn->rs2 + off_rs2, rs3 = insn->rs3 + off_rs3;
         DBG("OP: rd = %d, rs1 = %d, rs2 = %d, r3 = %d, imm = 0x%x %d", rd, rs1,
             rs2, rs3, insn->imm, insn->op);
         u64 dst = reg_val(rd);
