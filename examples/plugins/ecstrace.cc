@@ -190,8 +190,24 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     }
 }
 
+static uint64_t csr_val(const uint8_t reg) {
+    const int n =
+        qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + 1 + 0x20 + 1);
+    int64_t ret;
+    switch (n) {
+    case 8:
+        ret = *((int64_t *)ctx.reg_buf->data);
+        break;
+    default:
+        ERR("Read bytes: %d", n);
+        assert(false && "XPR must be 32 or 64 bits");
+    }
+    g_byte_array_set_size(ctx.reg_buf, 0);
+    return ret;
+}
+
 static int64_t xpr_val(const uint8_t reg) {
-    assert(reg < 0x20);
+    assert(reg <= 0x20); // 0x20 for pc
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
     int64_t ret;
     switch (n) {
@@ -229,8 +245,37 @@ static uint64_t fpr_val(const uint8_t reg) {
     return ret;
 }
 
-static int dump_memory_region(void *, uint64_t start, uint64_t end,
-                              unsigned long protection) {
+static void dump_register_file() {
+    if (!ctx.reg_state_file.is_open())
+        return;
+
+    const char header[16 + 1] = "RISC-V reg   0.0";
+    ctx.reg_state_file.write((const char *)&header, 16);
+
+    const int64_t pc = xpr_val(/*pc=*/32);
+    ctx.reg_state_file.write((const char *)&pc, sizeof(pc));
+
+    // XPR 32 registers
+    for (int i = 0; i < 32; i++) {
+        int64_t val = xpr_val(i);
+        ctx.reg_state_file.write((const char *)&val, sizeof(val));
+    }
+    // FPR 32 registers
+    for (int i = 0; i < 32; i++) {
+        uint64_t val = fpr_val(i);
+        ctx.reg_state_file.write((const char *)&val, sizeof(val));
+    }
+
+    const uint64_t x = csr_val(0);
+    const uint64_t fflags = csr_val(1);
+    const uint64_t frm = csr_val(2);
+    ctx.reg_state_file.write((const char *)&x, sizeof(x));
+    ctx.reg_state_file.write((const char *)&fflags, sizeof(fflags));
+    ctx.reg_state_file.write((const char *)&frm, sizeof(frm));
+}
+
+static int walk_dump_memory(void *, uint64_t start, uint64_t end,
+                            unsigned long protection) {
     if (!ctx.mem_state_file.is_open())
         return 0;
 
@@ -261,20 +306,13 @@ static int dump_memory_region(void *, uint64_t start, uint64_t end,
     return 0;
 }
 
-static void dump_register_file() {
-    if (!ctx.reg_state_file.is_open())
+static void dump_memory() {
+    if (!ctx.mem_state_file.is_open())
         return;
 
-    // XPR 32 registers
-    for (int i = 0; i < 32; i++) {
-        int64_t val = xpr_val(i);
-        ctx.reg_state_file.write((const char *)&val, sizeof(val));
-    }
-    // FPR 32 registers
-    for (int i = 0; i < 32; i++) {
-        uint64_t val = fpr_val(i);
-        ctx.reg_state_file.write((const char *)&val, sizeof(val));
-    }
+    const char header[16 + 1] = "RISC-V mem   0.0";
+    ctx.mem_state_file.write((const char *)&header, 16);
+    qemu_plugin_walk_memory_regions(nullptr, walk_dump_memory);
 }
 
 static void dump_state() {
@@ -301,16 +339,8 @@ static void dump_state() {
         return;
     }
 
-    {
-        const char header[16 + 1] = "RISC-V reg   0.0";
-        ctx.reg_state_file.write((const char *)&header, 16);
-        dump_register_file();
-    }
-    {
-        const char header[16 + 1] = "RISC-V mem   0.0";
-        ctx.mem_state_file.write((const char *)&header, 16);
-        qemu_plugin_walk_memory_regions(nullptr, dump_memory_region);
-    }
+    dump_register_file();
+    dump_memory();
 
     ctx.mem_state_file.close();
     ctx.reg_state_file.close();
