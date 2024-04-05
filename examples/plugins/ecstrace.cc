@@ -229,12 +229,16 @@ static uint64_t fpr_val(const uint8_t reg) {
     return ret;
 }
 
-static int dump_memory_region(void *priv, uint64_t start, uint64_t end,
+static int dump_memory_region(void *, uint64_t start, uint64_t end,
                               unsigned long protection) {
-    (void)(priv);
-
     if (!ctx.mem_state_file.is_open())
         return 0;
+
+    const size_t page_size = 4096;
+    struct Page {
+        u64 addr;
+        u8 data[page_size];
+    };
 
     INFO("Dump memory region (0x%lx - 0x%lx)", start, end);
     if (!(protection & 0x1)) {
@@ -245,11 +249,13 @@ static int dump_memory_region(void *priv, uint64_t start, uint64_t end,
     uint8_t *buf = (uint8_t *)malloc(size);
     assert(qemu_plugin_read_memory(buf, start, size) == 0 &&
            "Failed to read memory");
+    assert(size % page_size == 0);
 
-    // TODO: Follow spec
-    ctx.mem_state_file.write((const char *)&start, sizeof(start));
-    ctx.mem_state_file.write((const char *)&end, sizeof(end));
-    ctx.mem_state_file.write((const char *)buf, size);
+    for (u64 addr = start; addr < end; addr += page_size) {
+        Page page = {addr};
+        memcpy(page.data, buf + (addr - start), page_size);
+        ctx.mem_state_file.write((const char *)&page, sizeof(page));
+    }
 
     free(buf);
     return 0;
@@ -295,8 +301,16 @@ static void dump_state() {
         return;
     }
 
-    dump_register_file();
-    qemu_plugin_walk_memory_regions(nullptr, dump_memory_region);
+    {
+        const char header[16 + 1] = "RISC-V reg   0.0";
+        ctx.reg_state_file.write((const char *)&header, 16);
+        dump_register_file();
+    }
+    {
+        const char header[16 + 1] = "RISC-V mem   0.0";
+        ctx.mem_state_file.write((const char *)&header, 16);
+        qemu_plugin_walk_memory_regions(nullptr, dump_memory_region);
+    }
 
     ctx.mem_state_file.close();
     ctx.reg_state_file.close();
