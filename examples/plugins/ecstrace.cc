@@ -50,6 +50,44 @@ struct InputOp {
     u64 address;
 };
 
+struct InputOpV2 { // 80 Bytes
+    u64 ip;
+    u64 next_ip;
+    u8 reservedA[4];
+    u32 instruction_word;
+    u8 logical_src_reg[4];
+    u8 logical_dst_reg[2];
+    u8 reservedB[2];
+    u64 src_value[4];
+    u64 dst_value[2];
+    u64 imm;
+    u64 mem_addr;
+    u64 mem_src_value;
+    u64 mem_dst_value;
+
+    InputOpV2(u64 ip, u64 next_ip, u32 instruction_word, u8 src_reg[4],
+              u8 dst_reg[2], u64 src_val[4], u64 dst_val[2], u64 imm,
+              u64 mem_addr, u64 mem_src_val, u64 mem_dst_val) {
+        this->ip = ip;
+        this->next_ip = next_ip;
+        this->instruction_word = instruction_word;
+        this->imm = imm;
+        this->mem_addr = mem_addr;
+        this->mem_src_value = mem_src_val;
+        this->mem_dst_value = mem_dst_val;
+        for (int i = 0; i < 4; i++) {
+            this->mem_src_value = src_val[i];
+            this->logical_src_reg[i] = src_reg[i];
+            this->src_value[i] = src_val[i];
+        }
+        for (int i = 0; i < 2; i++) {
+            this->mem_dst_value = dst_val[i];
+            this->logical_dst_reg[i] = dst_reg[i];
+            this->dst_value[i] = dst_val[i];
+        }
+    }
+};
+
 class Ctx {
   public:
     Ctx() {
@@ -94,7 +132,8 @@ class Ctx {
     std::vector<uint8_t> trace_bytes;
     std::ofstream trace_file;
 
-    std::ofstream state_dump_file;
+    std::ofstream mem_state_file;
+    std::ofstream reg_state_file;
 
     const rv_decode *prev_insn = nullptr;
     std::optional<std::function<void(const rv_decode *next_insn)>>
@@ -125,60 +164,6 @@ class Ctx {
 };
 
 static Ctx ctx;
-
-static int dump_memory_region(void *priv, uint64_t start, uint64_t end,
-                              unsigned long protection) {
-    (void)(priv);
-    if (!ctx.state_dump_file.is_open())
-        return 0;
-
-    INFO("Dump memory region (0x%lx - 0x%lx)", start, end);
-    if (!(protection & 0x1)) {
-        WARN("Memory region is not readable");
-        return 0;
-    }
-    const uint64_t size = end - start;
-    uint8_t *buf = (uint8_t *)malloc(size);
-    assert(qemu_plugin_read_memory(buf, start, size) == 0 &&
-           "Failed to read memory");
-
-    ctx.state_dump_file.write((const char *)&start, sizeof(start));
-    ctx.state_dump_file.write((const char *)&end, sizeof(end));
-    ctx.state_dump_file.write((const char *)buf, size);
-
-    free(buf);
-    return 0;
-}
-
-static void dump_register_file() {
-    int num_reg_files;
-    const qemu_plugin_register_file_t *reg_files =
-        qemu_plugin_get_register_files(0, &num_reg_files);
-
-    for (int i = 0; i < num_reg_files; i++) {
-        const qemu_plugin_register_file_t *reg_file = &reg_files[i];
-        DEBUG("base_reg = %d, num_regs = %d", reg_file->base_reg,
-              reg_file->num_regs);
-        for (int k = 0; k < reg_file->num_regs; k++) {
-            const int n =
-                qemu_plugin_read_register(ctx.reg_buf, reg_file->base_reg + k);
-            if (n == 4) {
-                const int32_t val = *((int32_t *)ctx.reg_buf->data);
-                DEBUG("Register %s (%d): 0x%x", reg_file->regs[k],
-                      reg_file->base_reg + k, val);
-            } else if (n == 8) {
-                const int64_t val = *((int64_t *)ctx.reg_buf->data);
-                DEBUG("Register %s (%d): 0x%lx", reg_file->regs[k],
-                      reg_file->base_reg + k, val);
-            } else {
-                ERR("Register %s (%d): %d bytes", reg_file->regs[k],
-                    reg_file->base_reg + k, n);
-                // assert(false && "Register must be 32 or 64 bits");
-            }
-            g_byte_array_set_size(ctx.reg_buf, 0);
-        }
-    }
-}
 
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     (void)(id);
@@ -244,6 +229,79 @@ static uint64_t fpr_val(const uint8_t reg) {
     return ret;
 }
 
+static int dump_memory_region(void *priv, uint64_t start, uint64_t end,
+                              unsigned long protection) {
+    (void)(priv);
+
+    if (!ctx.mem_state_file.is_open())
+        return 0;
+
+    INFO("Dump memory region (0x%lx - 0x%lx)", start, end);
+    if (!(protection & 0x1)) {
+        WARN("Memory region is not readable");
+        return 0;
+    }
+    const uint64_t size = end - start;
+    uint8_t *buf = (uint8_t *)malloc(size);
+    assert(qemu_plugin_read_memory(buf, start, size) == 0 &&
+           "Failed to read memory");
+
+    // TODO: Follow spec
+    ctx.mem_state_file.write((const char *)&start, sizeof(start));
+    ctx.mem_state_file.write((const char *)&end, sizeof(end));
+    ctx.mem_state_file.write((const char *)buf, size);
+
+    free(buf);
+    return 0;
+}
+
+static void dump_register_file() {
+    if (!ctx.reg_state_file.is_open())
+        return;
+
+    // XPR 32 registers
+    for (int i = 0; i < 32; i++) {
+        int64_t val = xpr_val(i);
+        ctx.reg_state_file.write((const char *)&val, sizeof(val));
+    }
+    // FPR 32 registers
+    for (int i = 0; i < 32; i++) {
+        uint64_t val = fpr_val(i);
+        ctx.reg_state_file.write((const char *)&val, sizeof(val));
+    }
+}
+
+static void dump_state() {
+    assert(!ctx.mem_state_file.is_open() &&
+           "Memory state file is already open");
+    assert(!ctx.reg_state_file.is_open() &&
+           "Register state file is already open");
+
+    if (const auto path = std::getenv("MEM_STATE_PATH")) {
+        INFO("Using memory state path '%s'", path);
+        ctx.mem_state_file.open(path, std::ios::binary);
+        assert(ctx.mem_state_file.is_open());
+    } else {
+        WARN("MEM_STATE_PATH not set, memory state will not be saved");
+        return;
+    }
+
+    if (const auto path = std::getenv("REG_STATE_PATH")) {
+        INFO("Using register state path '%s'", path);
+        ctx.reg_state_file.open(path, std::ios::binary);
+        assert(ctx.reg_state_file.is_open());
+    } else {
+        WARN("REG_STATE_PATH not set, register state will not be saved");
+        return;
+    }
+
+    dump_register_file();
+    qemu_plugin_walk_memory_regions(nullptr, dump_memory_region);
+
+    ctx.mem_state_file.close();
+    ctx.reg_state_file.close();
+}
+
 static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
     (void)(cpu_index);
     const rv_decode *insn = (rv_decode *)udata;
@@ -257,21 +315,7 @@ static void vcpu_insn_exec(unsigned int cpu_index, void *udata) {
         ctx.exit_addr = ctx.prev_insn->pc + 4;
         INFO("Entry address (0x%lx) reached, enabling tracing", ctx.entry_addr);
         INFO("Setting exit address to 0x%lx", ctx.exit_addr);
-
-        if (!ctx.state_dump_file.is_open()) {
-            const auto dump_path = std::getenv("STATE_DUMP_PATH");
-            if (dump_path) {
-                INFO("Using state dump path '%s'", dump_path);
-                ctx.state_dump_file.open(dump_path, std::ios::binary);
-                assert(ctx.state_dump_file.is_open());
-            } else {
-                WARN("STATE_DUMP_PATH not set, state dump will not be saved");
-            }
-        }
-        dump_register_file();
-        qemu_plugin_walk_memory_regions(nullptr, dump_memory_region);
-        if (ctx.state_dump_file.is_open())
-            ctx.state_dump_file.close();
+        dump_state();
     }
     if (insn->pc == ctx.exit_addr) {
         INFO("Exit address (0x%lx) reached, disabling tracing", ctx.exit_addr);
@@ -319,12 +363,11 @@ DEBUG("opcode = 0x%lx", insn->inst);
     case 0b0010111: // AUiPC
         ctx.pending_trace = [insn](const rv_decode *) {
             u64 dst = xpr_val(insn->rd);
-            InputOp op = {
-                insn->pc, (uint32_t)insn->inst, insn->rd, insn->rs1, insn->rs2,
-                false,    (u64)insn->imm,       dst,      0};
-            DBG("Int: rd = %d, rs1 = %d, rs2 = %d, imm = 0x%x, val = 0x%lx",
-                insn->rd, insn->rs1, insn->rs2, insn->imm, dst);
-            ctx.write(op);
+            // InputOpV2 op(insn->pc, insn->pc + 4, (uint32_t)insn->inst,
+            // insn->rd,
+            //              insn->rs1, insn->rs2, false, (u64)insn->imm, dst,
+            //              0);
+            // ctx.write(op);
         };
         break;
     case 0b1101111: // JAL
