@@ -22,8 +22,11 @@
 #include <vector>
 
 #define ERR(fmt, ...)                                                          \
-    fprintf(stderr, "[%s:%-4d] \033[1;31m[  ERR]\033[0m " fmt "\n", __FILE__,  \
-            __LINE__, ##__VA_ARGS__)
+    do {                                                                       \
+        fprintf(stderr, "[%s:%-4d] \033[1;31m[  ERR]\033[0m " fmt "\n",        \
+                __FILE__, __LINE__, ##__VA_ARGS__);                            \
+        exit(1);                                                               \
+    } while (0)
 #define INFO(fmt, ...)                                                         \
     fprintf(stderr, "[%s:%-4d] \033[1;32m[ INFO]\033[0m " fmt "\n", __FILE__,  \
             __LINE__, ##__VA_ARGS__)
@@ -196,8 +199,7 @@ static uint64_t csr_val(const uint8_t reg) {
         ret = *((int64_t *)ctx.reg_buf->data);
         break;
     default:
-        ERR("Read bytes: %d", n);
-        assert(false && "XPR must be 32 or 64 bits");
+        ERR("Read bytes: %d. XPR must be 32 or 64 bits", n);
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
@@ -215,8 +217,7 @@ static uint64_t xpr_val(const uint8_t reg) {
         ret = *((uint64_t *)ctx.reg_buf->data);
         break;
     default:
-        ERR("Read bytes: %d", n);
-        assert(false && "XPR must be 32 or 64 bits");
+        ERR("Read bytes: %d. XPR must be 32 or 64 bits", n);
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
@@ -235,8 +236,7 @@ static uint64_t fpr_val(const uint8_t reg) {
         ret = *((uint64_t *)ctx.reg_buf->data);
         break;
     default:
-        ERR("Read bytes: %d", n);
-        assert(false && "FPR must be 32 or 64 bits");
+        ERR("Read bytes: %d. FPR must be 32 or 64 bits", n);
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
@@ -305,7 +305,7 @@ static int walk_dump_memory(void *, uint64_t start, uint64_t end,
     assert(size % page_size == 0);
 
     for (u64 addr = start; addr < end; addr += page_size) {
-        Page page = {addr};
+        Page page = {.addr = addr, .data = {}};
         memcpy(page.data, buf + (addr - start), page_size);
         ctx.mem_state_file.write((const char *)&page, sizeof(page));
     }
@@ -393,7 +393,6 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
 
     if (is_compressed) {
         ERR("Compressed instruction is not supported");
-        assert(false && "Compressed instruction is not supported");
     }
 
     assert((insn->codec != rv_codec_r2_immhl &&
@@ -437,7 +436,6 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             break;
         default:
             ERR("Unknown funct3: 0x%lx", funct3);
-            assert(false && "Unknown funct3");
         }
     } break;
     case 0b0000111: // FpLoad
@@ -468,7 +466,6 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             off_rs1 = off_rs2 = 32; // rs1:f,rs2:f,rd:x (cmp)
         } else {
             ERR("Unknown alutype: 0x%lx", alutype);
-            assert(false && "Unknown opcode");
         }
         break;
     }
