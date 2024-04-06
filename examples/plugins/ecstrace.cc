@@ -206,20 +206,20 @@ static uint64_t csr_val(const uint8_t reg) {
 static uint64_t xpr_val(const uint8_t reg) {
     assert(reg <= 0x20); // 0x20 for pc
     const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
-    int64_t ret;
+    uint64_t ret;
     switch (n) {
     case 4:
-        ret = *((int32_t *)ctx.reg_buf->data);
+        ret = *((uint32_t *)ctx.reg_buf->data);
         break;
     case 8:
-        ret = *((int64_t *)ctx.reg_buf->data);
+        ret = *((uint64_t *)ctx.reg_buf->data);
         break;
     default:
         ERR("Read bytes: %d", n);
         assert(false && "XPR must be 32 or 64 bits");
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
-    return (uint64_t)ret;
+    return ret;
 }
 
 static uint64_t fpr_val(const uint8_t reg) {
@@ -419,9 +419,27 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         need_mem_src_val = true;
         break;
     case 0b0100011: // Store
+    {
         mem_addr = reg_val(insn->rs1) + insn->imm;
         mem_dst_val = xpr_val(insn->rs2);
-        break;
+        const uint64_t funct3 = (insn->inst >> 12) & 0x07;
+        switch (funct3) {
+        case 0b000: // SB
+            mem_dst_val = mem_dst_val & 0xff;
+            break;
+        case 0b001: // SH
+            mem_dst_val = mem_dst_val & 0xffff;
+            break;
+        case 0b010: // SW
+            mem_dst_val = mem_dst_val & 0xffffffff;
+            break;
+        case 0b011: // SD
+            break;
+        default:
+            ERR("Unknown funct3: 0x%lx", funct3);
+            assert(false && "Unknown funct3");
+        }
+    } break;
     case 0b0000111: // FpLoad
         off_rd = 32;
         mem_addr = reg_val(insn->rs1) + insn->imm;
