@@ -42,19 +42,7 @@ typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
 
-struct InputOp {
-    u64 ip;
-    u32 instruction_word;
-    u8 logical_dst_reg; // FIXME: DecodedOpComponentとするべき
-    u8 logical_src1_reg;
-    u8 logical_src2_reg;
-    bool is_wrong_path_instruction;
-    u64 imm;
-    u64 result;
-    u64 address;
-};
-
-struct InputOpV2 { // 80 Bytes
+struct InputOp { // 80 Bytes
     u64 ip;
     u64 next_ip;
     u8 reservedA[4] = {};
@@ -69,7 +57,7 @@ struct InputOpV2 { // 80 Bytes
     u64 mem_src_value;
     u64 mem_dst_value;
 
-    InputOpV2(u64 ip, u64 next_ip, u32 instruction_word,
+    InputOp(u64 ip, u64 next_ip, u32 instruction_word,
               std::array<u8, 4> src_reg, std::array<u8, 2> dst_reg,
               std::array<u64, 4> src_val, std::array<u64, 2> dst_val, u64 imm,
               u64 mem_addr, u64 mem_src_val, u64 mem_dst_val)
@@ -107,8 +95,7 @@ class Ctx {
             INFO("Using entry address 0x%lx", this->entry_addr);
         } else {
             this->trace_enabled = true;
-            WARN("TRACE_MAIN_ENTRY_ADDR or TRACE_MAIN_EXIT_ADDR"
-                 " not set, tracing all instructions");
+            WARN("TRACE_MAIN_ENTRY_ADDR not set, tracing all instructions");
         }
 
         const auto skip_insns = std::getenv("SKIP_INSNS");
@@ -129,9 +116,7 @@ class Ctx {
 
     int bits;
 
-    std::vector<uint8_t> trace_bytes;
     std::ofstream trace_file;
-
     std::ofstream mem_state_file;
     std::ofstream reg_state_file;
 
@@ -143,52 +128,16 @@ class Ctx {
     uint64_t num_insns_from_entry = 0;
     uint64_t entry_addr = 0, exit_addr = 0;
     bool trace_enabled = false;
-    bool trace_started = false;
 
     GByteArray *reg_buf;
-
-    template <typename T> void write(const T &data) {
-        if (this->trace_bytes.size() > 100 * 1024 * 1024) {
-            this->flush();
-        }
-        this->trace_bytes.insert(this->trace_bytes.end(), (const char *)&data,
-                                 (const char *)&data + sizeof(T));
-    }
-
-    void flush() {
-        this->trace_file.write((const char *)this->trace_bytes.data(),
-                               this->trace_bytes.size());
-        this->trace_file.flush();
-        this->trace_bytes.clear();
-    }
 };
 
 static Ctx ctx;
 
-static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
-    (void)(id);
-    assert(vcpu_index == 0 && "Only one vCPU supported");
-
-    {
-        int num_reg_files;
-        const qemu_plugin_register_file_t *reg_files =
-            qemu_plugin_get_register_files(vcpu_index, &num_reg_files);
-        // org.gnu.gdb.riscv.cpu
-        // org.gnu.gdb.riscv.fpu
-        // org.gnu.gdb.riscv.virtual
-        // org.gnu.gdb.riscv.csr
-        for (int i = 0; i < num_reg_files; i++) {
-            const qemu_plugin_register_file_t *reg_file = &reg_files[i];
-            DEBUG("%s (%d registers)", reg_file->name, reg_file->num_regs);
-#if 0
-        for (int k = 0; k < reg_file->num_regs; k++) {
-            DEBUG("%d (%d) th register: %s", k, reg_file->base_reg + k,
-                  reg_file->regs[k]);
-        }
-#endif
-        }
-    }
-}
+//
+// Utils for reading register values
+// TODO: {csr,xpr,fpr}_val() should be merged into reg_val().
+//
 
 static uint64_t csr_val(const uint8_t reg) {
     const int n =
@@ -252,6 +201,10 @@ static u64 reg_val(const uint8_t reg) {
     else
         return fpr_val(reg - 32);
 }
+
+//
+// Utils for dumping memory/register state
+//
 
 static void dump_register_file() {
     if (!ctx.reg_state_file.is_open())
@@ -354,6 +307,35 @@ static void dump_state() {
     ctx.reg_state_file.close();
 }
 
+//
+// Plugin callbacks
+//
+
+static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
+    (void)(id);
+    assert(vcpu_index == 0 && "Only one vCPU supported");
+
+    {
+        int num_reg_files;
+        const qemu_plugin_register_file_t *reg_files =
+            qemu_plugin_get_register_files(vcpu_index, &num_reg_files);
+        // org.gnu.gdb.riscv.cpu
+        // org.gnu.gdb.riscv.fpu
+        // org.gnu.gdb.riscv.virtual
+        // org.gnu.gdb.riscv.csr
+        for (int i = 0; i < num_reg_files; i++) {
+            const qemu_plugin_register_file_t *reg_file = &reg_files[i];
+            DEBUG("%s (%d registers)", reg_file->name, reg_file->num_regs);
+#if 0
+        for (int k = 0; k < reg_file->num_regs; k++) {
+            DEBUG("%d (%d) th register: %s", k, reg_file->base_reg + k,
+                  reg_file->regs[k]);
+        }
+#endif
+        }
+    }
+}
+
 static void vcpu_insn_exec(unsigned int, void *udata) {
     // #define DBG(fmt, ...) DEBUG(fmt, ##__VA_ARGS__)
 #define DBG(fmt, ...)                                                          \
@@ -403,6 +385,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     u64 mem_addr = 0, mem_dst_val = 0;
     bool need_mem_src_val = false;
 
+    // TODO: ecall
     switch (insn->inst & 0x7f) {
     case 0x37: // LUI
     case 0x17: // AUIPC
@@ -473,17 +456,17 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
 
     ctx.pending_trace = [=](const rv_decode *next_insn) {
         const auto pc = insn->pc;
-        const auto npc = next_insn->pc;
+        const auto npc = next_insn ? next_insn->pc : 0;
         u8 rd = insn->rd + off_rd, rs1 = insn->rs1 + off_rs1,
            rs2 = insn->rs2 + off_rs2, rs3 = insn->rs3 + off_rs3;
         DBG("OP: rd = %d, rs1 = %d, rs2 = %d, r3 = %d, imm = 0x%x %d", rd, rs1,
             rs2, rs3, insn->imm, insn->op);
         u64 dst = reg_val(rd);
         u64 mem_src_val = need_mem_src_val ? dst : 0;
-        InputOpV2 op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
+        InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
                      {reg_val(rs1), reg_val(rs2), reg_val(rs3), 0}, {dst, 0},
                      (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
-        ctx.write(op);
+        ctx.trace_file.write((const char *)&op, sizeof(op));
     };
 
 #undef DBG
@@ -531,15 +514,12 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
 /**
  * On plugin exit, print last instruction in cache
  */
-static void plugin_exit(qemu_plugin_id_t id, void *p) {
-    (void)(id);
-    (void)(p);
+static void plugin_exit(qemu_plugin_id_t, void *) {
     if (const auto trace =
             std::exchange(ctx.pending_trace, std::nullopt).value_or(nullptr)) {
         trace(nullptr);
     }
 
-    ctx.flush();
     ctx.trace_file.close();
 }
 
@@ -554,6 +534,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     assert(!info->system_emulation && "System emulation not supported");
 
     INFO("Target name: %s", info->target_name);
+    assert(strcmp(info->target_name, "riscv64") == 0 ||
+           strcmp(info->target_name, "riscv32") == 0);
     ctx.bits = strcmp(info->target_name, "riscv64") == 0 ? 64 : 32;
 
     // Register translation block and exit callbacks
