@@ -58,9 +58,9 @@ struct InputOp { // 80 Bytes
     u64 mem_dst_value;
 
     InputOp(u64 ip, u64 next_ip, u32 instruction_word,
-              std::array<u8, 4> src_reg, std::array<u8, 2> dst_reg,
-              std::array<u64, 4> src_val, std::array<u64, 2> dst_val, u64 imm,
-              u64 mem_addr, u64 mem_src_val, u64 mem_dst_val)
+            std::array<u8, 4> src_reg, std::array<u8, 2> dst_reg,
+            std::array<u64, 4> src_val, std::array<u64, 2> dst_val, u64 imm,
+            u64 mem_addr, u64 mem_src_val, u64 mem_dst_val)
         : ip(ip), next_ip(next_ip), instruction_word(instruction_word),
           imm(imm), mem_addr(mem_addr), mem_src_value(mem_src_val),
           mem_dst_value(mem_dst_val) {
@@ -386,6 +386,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     bool need_mem_src_val = false;
 
     // TODO: ecall
+    // clang-format off
     switch (insn->inst & 0x7f) {
     case 0x37: // LUI
     case 0x17: // AUIPC
@@ -406,19 +407,11 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         mem_dst_val = xpr_val(insn->rs2);
         const uint64_t funct3 = (insn->inst >> 12) & 0x07;
         switch (funct3) {
-        case 0b000: // SB
-            mem_dst_val = mem_dst_val & 0xff;
-            break;
-        case 0b001: // SH
-            mem_dst_val = mem_dst_val & 0xffff;
-            break;
-        case 0b010: // SW
-            mem_dst_val = mem_dst_val & 0xffffffff;
-            break;
-        case 0b011: // SD
-            break;
-        default:
-            ERR("Unknown funct3: 0x%lx", funct3);
+        case 0b000: mem_dst_val = mem_dst_val & 0xff;       break; // SB
+        case 0b001: mem_dst_val = mem_dst_val & 0xffff;     break; // SH
+        case 0b010: mem_dst_val = mem_dst_val & 0xffffffff; break; // SW
+        case 0b011:                                         break; // SD
+        default: ERR("Unknown funct3: 0x%lx", funct3);
         }
     } break;
     case 0b0000111: // FpLoad
@@ -433,26 +426,39 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         break;
     case 0b1010011: // FpInst
     {
-        const uint64_t alutype = (insn->inst >> 25) & 0x7f;
-        if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
-            alutype == 0x22) {
-            off_rs1 = off_rd = 32; // rs1:f,rd:f
-        } else if (alutype == 0x60 || alutype == 0x70 || alutype == 0x61 ||
-                   alutype == 0x71) {
-            off_rs1 = 32; // rs1:f,rd:x
-        } else if (alutype == 0x2c || alutype == 0x2d || alutype == 0x20 ||
-                   alutype == 0x21) {
-            off_rd = 32; // rs1:x,rd:f
-        } else if (alutype <= 0x3f) {
-            off_rs1 = off_rs2 = off_rd = 32; // rs1:f,rs2:f,rd:f (arith)
-        } else if (alutype >= 0x40) {
-            off_rs1 = off_rs2 = 32; // rs1:f,rs2:f,rd:x (cmp)
-        } else {
-            ERR("Unknown alutype: 0x%lx", alutype);
+        const uint64_t funct5 = (insn->inst >> 25) & 0x7f;
+        switch (funct5) {
+            case 0b0010000: case 0b0010001: // FSGNJ.S, FSGNJN.S, FSGNJX.S, FSGNJ.D, FSGNJN.D, FSGNJX.D
+            case 0b0101100: case 0b0101101: // FSQRT.D, FSQRT.S
+            case 0b0100000: case 0b0100001: // FCVT.S.D, FCVT.D.S
+                off_rs1 = off_rd = 32; // rs1:f,rd:f
+                break;
+            case 0b1100000: // FCVT.L.S, FCVT.LU.S, FCVT.W.S, FCVT.WU.S
+            case 0b1100001: // FCVT.W.D, FCVT.WU.D, FCVT.L.D, FCVT.LU.D
+            case 0b1110000: case 0b1110001: // FMV.X.W, FCLASS.S, FMV.X.D, FCLASS.D
+                off_rs1 = 32; // rs1:f,rd:x
+                break;
+            case 0b0000000: case 0b0000001: // FADD.S, FADD.D
+            case 0b0000100: case 0b0000101: // FSUB.S, FSUB.D
+            case 0b0001000: case 0b0001001: // FMUL.S, FMUL.D
+            case 0b0001100: case 0b0001101: // FDIV.S, FDIV.D
+                off_rs1 = off_rs2 = off_rd = 32; // rs1:f,rs2:f,rd:f
+                break;
+            case 0b1101000: // FCVT.S.L, FCVT.S.LU, FCVT.S.W, FCVT.S.WU
+            case 0b1111000: // FMV.W.X
+            case 0b1111001: // FMV.D.X
+                off_rd = 32; // rs1:x,rd:f
+                break;
+            case 0b1010001: // FEQ.D, FLT.D, FLE.D
+                off_rs1 = off_rs2 = 32; // rs1:f,rs2:f,rd:x
+                break;
+            default:
+                ERR("Unknown funct5: %07lb", funct5);
         }
         break;
     }
     }
+    // clang-format off
 
     ctx.pending_trace = [=](const rv_decode *next_insn) {
         const auto pc = insn->pc;
@@ -464,8 +470,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         u64 dst = reg_val(rd);
         u64 mem_src_val = need_mem_src_val ? dst : 0;
         InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
-                     {reg_val(rs1), reg_val(rs2), reg_val(rs3), 0}, {dst, 0},
-                     (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
+                   {reg_val(rs1), reg_val(rs2), reg_val(rs3), 0}, {dst, 0},
+                   (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
         ctx.trace_file.write((const char *)&op, sizeof(op));
     };
 
