@@ -2138,6 +2138,7 @@ static void riscv_cpu_class_init(ObjectClass *c, void *data)
 #endif
     cc->gdb_arch_name = riscv_gdb_arch_name;
     cc->tcg_ops = &riscv_tcg_ops;
+    cc->gdb_num_core_regs = 32 + 1; // TODO: 32 XPRs and 1 PC
 
     object_class_property_add(c, "mvendorid", "uint32", cpu_get_mvendorid,
                               cpu_set_mvendorid, NULL, NULL);
