@@ -401,6 +401,10 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         mem_addr = reg_val(insn->rs1) + insn->imm;
         need_mem_src_val = true;
         break;
+    case 0b1101111: // JAL
+    case 0b1100111: // JALR
+    case 0b1100011: // BRcc
+        break;
     case 0b0100011: // Store
     {
         mem_addr = reg_val(insn->rs1) + insn->imm;
@@ -431,6 +435,12 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         default: ERR("Unknown funct3: 0x%lx", funct3);
         }
     } break;
+    case 0b1000011: // FMADD.S
+    case 0b1000111: // FMSUB.S
+    case 0b1001011: // FNMSUB.S
+    case 0b1001111: // FNMADD.S
+        off_rs1 = off_rs2 = off_rs3 = off_rd = 32; // rs1:f,rs2:f,rs3:f,rd:f
+        break;
     case 0b1010011: // FpInst
     {
         const uint64_t funct5 = (insn->inst >> 25) & 0x7f;
@@ -465,20 +475,23 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         }
         break;
     }
+    default: ERR("Unknown opcode: 0x%lx (%lb)", insn->inst, insn->inst & 0x7f);
     }
     // clang-format off
+
+    const u8 rd = insn->rd + off_rd, rs1 = insn->rs1 + off_rs1,
+       rs2 = insn->rs2 + off_rs2, rs3 = insn->rs3 + off_rs3;
+    const u64 rs1_val = reg_val(rs1), rs2_val = reg_val(rs2), rs3_val = reg_val(rs3);
 
     ctx.pending_trace = [=](const rv_decode *next_insn) {
         const auto pc = insn->pc;
         const auto npc = next_insn ? next_insn->pc : 0;
-        u8 rd = insn->rd + off_rd, rs1 = insn->rs1 + off_rs1,
-           rs2 = insn->rs2 + off_rs2, rs3 = insn->rs3 + off_rs3;
         DBG("OP: rd = %d, rs1 = %d, rs2 = %d, r3 = %d, imm = 0x%x %d", rd, rs1,
             rs2, rs3, insn->imm, insn->op);
-        u64 dst = reg_val(rd);
-        u64 mem_src_val = need_mem_src_val ? dst : 0;
+        u64 dst_val = reg_val(rd);
+        u64 mem_src_val = need_mem_src_val ? dst_val : 0;
         InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
-                   {reg_val(rs1), reg_val(rs2), reg_val(rs3), 0}, {dst, 0},
+                   {rs1_val, rs2_val, rs3_val, 0}, {dst_val, 0},
                    (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
         ctx.trace_file.write((const char *)&op, sizeof(op));
     };
