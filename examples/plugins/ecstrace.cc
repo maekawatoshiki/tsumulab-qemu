@@ -385,9 +385,36 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     u64 mem_addr = 0, mem_dst_val = 0;
     bool need_mem_src_val = false;
 
-    // TODO: ecall
     // clang-format off
     switch (insn->inst & 0x7f) {
+    case 0b1110011: // ECALL/CSR
+    {
+        const int funct3 = (insn->inst >> 12) & 0x07;
+        switch (funct3) {
+        case 0b000:
+            std::array<u64, 64> cur_xpr_fpr;
+            for (int i = 0; i < 64; i++) cur_xpr_fpr[i] = reg_val(i);
+            ctx.pending_trace = [=](const rv_decode *next_insn) {
+                u8 changed_reg = 0;
+                for (int i = 0; i < 64; i++) {
+                    u64 new_xpr_fpr = reg_val(i);
+                    if (cur_xpr_fpr[i] != new_xpr_fpr) {
+                        assert(changed_reg == 0 && "Only one register should be modified");
+                        changed_reg = i;
+                    }
+                }
+                const auto pc = insn->pc;
+                const auto npc = next_insn ? next_insn->pc : 0;
+                u64 changed_val = reg_val(changed_reg);
+                InputOp op(pc, npc, insn->inst, {0, 0, 0, 0}, {changed_reg, 0},
+                           {0, 0, 0, 0}, {changed_val, 0}, 0, 0, 0, 0);
+                ctx.trace_file.write((const char *)&op, sizeof(op));
+            };
+            break;
+        default:
+            ERR("Unknown csr/ecall: 0x%lx (%lb)", insn->inst, insn->inst & 0x7f);
+        }
+    } break;
     case 0x37: // LUI
     case 0x17: // AUIPC
         break;
