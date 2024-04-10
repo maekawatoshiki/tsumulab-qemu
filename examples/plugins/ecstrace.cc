@@ -411,8 +411,9 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                 ctx.trace_file.write((const char *)&op, sizeof(op));
             };
             return;
-        // case 0b010: // CSRRS
-        //     return;
+        case 0b001: // CSRRW
+        case 0b010: // CSRRS
+            break;
         default:
             ERR("Unknown csr/ecall: 0x%lx (%b)", insn->inst, funct3);
         }
@@ -516,8 +517,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         switch (funct5) {
         case 0b00000: // AMOADD.D, AMOADD.W
             switch (funct3) {
-            case 0b010: mem_dst_val = mem_dst_val & 0xffffffff + mem_val & 0xffffffff; break; // AMOADD.W
-            case 0b011: mem_dst_val = mem_dst_val + mem_val;                           break; // AMOADD.D
+            case 0b010: mem_dst_val = (mem_dst_val & 0xffffffff) + (mem_val & 0xffffffff); break; // AMOADD.W
+            case 0b011: mem_dst_val =  mem_dst_val + mem_val;                              break; // AMOADD.D
             default: ERR("Unknown funct3: %03b", funct3);
             }
             break;
