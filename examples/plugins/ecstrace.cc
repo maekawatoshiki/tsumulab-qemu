@@ -410,9 +410,11 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                            {0, 0, 0, 0}, {changed_val, 0}, 0, 0, 0, 0);
                 ctx.trace_file.write((const char *)&op, sizeof(op));
             };
-            break;
+            return;
+        // case 0b010: // CSRRS
+        //     return;
         default:
-            ERR("Unknown csr/ecall: 0x%lx (%lb)", insn->inst, insn->inst & 0x7f);
+            ERR("Unknown csr/ecall: 0x%lx (%b)", insn->inst, funct3);
         }
     } break;
     case 0x37: // LUI
