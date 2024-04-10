@@ -470,8 +470,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         break;
     case 0b1010011: // FpInst
     {
-        const uint64_t funct5 = (insn->inst >> 25) & 0x7f;
-        switch (funct5) {
+        const uint64_t ty = (insn->inst >> 25) & 0x7f;
+        switch (ty) {
             case 0b0010000: case 0b0010001: // FSGNJ.S, FSGNJN.S, FSGNJX.S, FSGNJ.D, FSGNJN.D, FSGNJX.D
             case 0b0101100: case 0b0101101: // FSQRT.D, FSQRT.S
             case 0b0100000: case 0b0100001: // FCVT.S.D, FCVT.D.S
@@ -498,10 +498,32 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                 off_rs1 = off_rs2 = 32; // rs1:f,rs2:f,rd:x
                 break;
             default:
-                ERR("Unknown funct5: %07lb", funct5);
+                ERR("Unknown type: %07lb", ty);
         }
         break;
     }
+    case 0b0101111: // ATOMIC
+    {
+        const int funct3 = (insn->inst >> 12) & 0x07;
+        const int funct5 = (insn->inst >> 27) & 0x1f;
+        mem_addr = reg_val(insn->rs1);
+        uint64_t mem_val = 0;
+        qemu_plugin_read_memory((uint8_t *)&mem_val, mem_addr, sizeof(mem_val));
+        need_mem_src_val = true;
+        mem_dst_val = xpr_val(insn->rs2);
+        switch (funct5) {
+        case 0b00000: // AMOADD.D, AMOADD.W
+            switch (funct3) {
+            case 0b010: mem_dst_val = mem_dst_val & 0xffffffff + mem_val & 0xffffffff; break; // AMOADD.W
+            case 0b011: mem_dst_val = mem_dst_val + mem_val;                           break; // AMOADD.D
+            default: ERR("Unknown funct3: %03b", funct3);
+            }
+            break;
+        case 0b11100: // AMOMAXU.D, AMOMAXU.W
+            break;
+        default: ERR("Unknown funct5: %05b", funct5);
+        }
+    } break;
     default: ERR("Unknown opcode: 0x%lx (%lb)", insn->inst, insn->inst & 0x7f);
     }
     // clang-format off
