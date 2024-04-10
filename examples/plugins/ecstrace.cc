@@ -140,15 +140,15 @@ static Ctx ctx;
 //
 
 static uint64_t csr_val(const uint8_t reg) {
-    const int n =
-        qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + 1 + 0x20 + 1);
+    const int n = qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + /*pc=*/1 +
+                                                             0x20 + /*priv=*/1);
     int64_t ret;
     switch (n) {
     case 8:
         ret = *((int64_t *)ctx.reg_buf->data);
         break;
     default:
-        ERR("Read bytes: %d. XPR must be 32 or 64 bits", n);
+        ERR("Read bytes: %d. CSR must be 64 bits", n);
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
@@ -176,7 +176,7 @@ static uint64_t fpr_val(const uint8_t reg) {
     assert(reg < 0x20);
     const int n =
         qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + /* pc = */ 1);
-    uint64_t ret;
+    uint64_t ret = 0;
     switch (n) {
     case 4:
         ret = *((uint32_t *)ctx.reg_buf->data);
@@ -227,7 +227,7 @@ static void dump_register_file() {
         ctx.reg_state_file.write((const char *)&val, sizeof(val));
     }
 
-    const uint64_t x = csr_val(0);
+    const uint64_t x = 0; // TODO: csr_val(0) returns 0 bytes
     const uint64_t fflags = csr_val(1);
     const uint64_t frm = csr_val(2);
     ctx.reg_state_file.write((const char *)&x, sizeof(x));
