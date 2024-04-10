@@ -1,5 +1,5 @@
-#include "../../disas/riscv.h"
-#include "../../include/qemu/qemu-plugin.h"
+#include "disas/riscv.h"
+#include "qemu/qemu-plugin.h"
 
 #include <assert.h>
 #include <cstdint>
@@ -420,10 +420,17 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         need_mem_src_val = true;
         break;
     case 0b0100111: // FpStore
+    {
         off_rs2 = 32;
         mem_addr = reg_val(insn->rs1) + insn->imm;
         mem_dst_val = fpr_val(insn->rs2);
-        break;
+        const uint64_t funct3 = (insn->inst >> 12) & 0x07;
+        switch (funct3) {
+        case 0b010: mem_dst_val = mem_dst_val & 0xffffffff; break; // FSW
+        case 0b011:                                         break; // FSD
+        default: ERR("Unknown funct3: 0x%lx", funct3);
+        }
+    } break;
     case 0b1010011: // FpInst
     {
         const uint64_t funct5 = (insn->inst >> 25) & 0x7f;
@@ -445,6 +452,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                 off_rs1 = off_rs2 = off_rd = 32; // rs1:f,rs2:f,rd:f
                 break;
             case 0b1101000: // FCVT.S.L, FCVT.S.LU, FCVT.S.W, FCVT.S.WU
+            case 0b1101001: // FCVT.D.W, FCVT.D.WU, FCVT.D.L, FCVT.D.LU
             case 0b1111000: // FMV.W.X
             case 0b1111001: // FMV.D.X
                 off_rd = 32; // rs1:x,rd:f
