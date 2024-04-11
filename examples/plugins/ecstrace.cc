@@ -192,14 +192,15 @@ static uint64_t fpr_val(const uint8_t reg) {
 }
 
 static u64 reg_val(const uint8_t reg) {
-    // 0~31: XPR, 32~63: FPR, 64: PC
-    assert(reg < 64);
+    // 0~31: XPR, 32~63: FPR, 64: PC, 65: fflags, 66: frm, 67: fcsr, ...
     if (reg < 32)
         return xpr_val(reg);
+    else if (reg < 64)
+        return fpr_val(reg - 32);
     else if (reg == 64)
         return xpr_val(32);
     else
-        return fpr_val(reg - 32);
+        return csr_val(reg - 64); // reg=65 -> csr=1
 }
 
 //
@@ -382,6 +383,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
            "insn->imm1 must be zero");
 
     u8 off_rd = 0, off_rs1 = 0, off_rs2 = 0, off_rs3 = 0;
+    u8 frm = 0;
     u64 mem_addr = 0;
     size_t mem_dst_size = 0;
     bool need_mem_src_val = false;
@@ -392,7 +394,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     {
         const int funct3 = (insn->inst >> 12) & 0x07;
         switch (funct3) {
-        case 0b000:
+        case 0b000: // ECALL
             std::array<u64, 64> cur_xpr_fpr;
             for (int i = 0; i < 64; i++) cur_xpr_fpr[i] = reg_val(i);
             ctx.pending_trace = [=](const rv_decode *next_insn) {
@@ -472,6 +474,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         break;
     case 0b1010011: // FpInst
     {
+        const uint64_t rm = (insn->inst >> 12) & 0x07;
+        if (rm == 0b111) frm = 66;
         const uint64_t ty = (insn->inst >> 25) & 0x7f;
         switch (ty) {
             case 0b0010000: case 0b0010001: // FSGNJ.S, FSGNJN.S, FSGNJX.S, FSGNJ.D, FSGNJN.D, FSGNJX.D
@@ -496,6 +500,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             case 0b1111001: // FMV.D.X
                 off_rd = 32; // rs1:x,rd:f
                 break;
+            case 0b1010000: // FEQ.S, FLT.S, FLE.S
             case 0b1010001: // FEQ.D, FLT.D, FLE.D
                 off_rs1 = off_rs2 = 32; // rs1:f,rs2:f,rd:x
                 break;
@@ -519,11 +524,12 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         break;
     default: ERR("Unknown opcode: 0x%lx (%lb)", insn->inst, insn->inst & 0x7f);
     }
-    // clang-format off
+    // clang-format on
 
     const u8 rd = insn->rd + off_rd, rs1 = insn->rs1 + off_rs1,
-       rs2 = insn->rs2 + off_rs2, rs3 = insn->rs3 + off_rs3;
-    const u64 rs1_val = reg_val(rs1), rs2_val = reg_val(rs2), rs3_val = reg_val(rs3);
+             rs2 = insn->rs2 + off_rs2, rs3 = insn->rs3 + off_rs3;
+    const u64 rs1_val = reg_val(rs1), rs2_val = reg_val(rs2),
+              rs3_val = reg_val(rs3), frm_val = reg_val(frm);
 
     ctx.pending_trace = [=](const rv_decode *next_insn) {
         const auto pc = insn->pc;
@@ -535,8 +541,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         u64 mem_dst_val = 0;
         if (mem_dst_size > 0)
             qemu_plugin_read_memory((uint8_t *)&mem_dst_val, mem_addr, mem_dst_size);
-        InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
-                   {rs1_val, rs2_val, rs3_val, 0}, {dst_val, 0},
+        InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, frm}, {rd, 0},
+                   {rs1_val, rs2_val, rs3_val, frm_val}, {dst_val, 0},
                    (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
         ctx.trace_file.write((const char *)&op, sizeof(op));
     };
