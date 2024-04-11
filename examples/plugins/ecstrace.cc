@@ -383,7 +383,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
            "insn->imm1 must be zero");
 
     u8 off_rd = 0, off_rs1 = 0, off_rs2 = 0, off_rs3 = 0;
-    u8 frm = 0;
+    u8 frm = 0, fflags = 0;
     u64 mem_addr = 0;
     size_t mem_dst_size = 0;
     bool need_mem_src_val = false;
@@ -476,6 +476,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     {
         const uint64_t rm = (insn->inst >> 12) & 0x07;
         if (rm == 0b111) frm = 66;
+        fflags = 65;
         const uint64_t ty = (insn->inst >> 25) & 0x7f;
         switch (ty) {
             case 0b0010000: case 0b0010001: // FSGNJ.S, FSGNJN.S, FSGNJX.S, FSGNJ.D, FSGNJN.D, FSGNJX.D
@@ -541,8 +542,11 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         u64 mem_dst_val = 0;
         if (mem_dst_size > 0)
             qemu_plugin_read_memory((uint8_t *)&mem_dst_val, mem_addr, mem_dst_size);
-        InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, frm}, {rd, 0},
-                   {rs1_val, rs2_val, rs3_val, frm_val}, {dst_val, 0},
+        u64 fflags_val = 0;
+        if (fflags > 0)
+            fflags_val = reg_val(fflags);
+        InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, frm}, {rd, fflags},
+                   {rs1_val, rs2_val, rs3_val, frm_val}, {dst_val, fflags_val},
                    (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
         ctx.trace_file.write((const char *)&op, sizeof(op));
     };
