@@ -382,7 +382,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
            "insn->imm1 must be zero");
 
     u8 off_rd = 0, off_rs1 = 0, off_rs2 = 0, off_rs3 = 0;
-    u64 mem_addr = 0, mem_dst_val = 0;
+    u64 mem_addr = 0;
+    size_t mem_dst_size = 0;
     bool need_mem_src_val = false;
 
     // clang-format off
@@ -438,14 +439,13 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     case 0b0100011: // Store
     {
         mem_addr = reg_val(insn->rs1) + insn->imm;
-        mem_dst_val = xpr_val(insn->rs2);
         const uint64_t funct3 = (insn->inst >> 12) & 0x07;
         switch (funct3) {
-        case 0b000: mem_dst_val = mem_dst_val & 0xff;       break; // SB
-        case 0b001: mem_dst_val = mem_dst_val & 0xffff;     break; // SH
-        case 0b010: mem_dst_val = mem_dst_val & 0xffffffff; break; // SW
-        case 0b011:                                         break; // SD
-        default: ERR("Unknown funct3: 0x%lx", funct3);
+        case 0b000: mem_dst_size = 1; break; // SB
+        case 0b001: mem_dst_size = 2; break; // SH
+        case 0b010: mem_dst_size = 4; break; // SW
+        case 0b011: mem_dst_size = 8; break; // SD
+        default: ERR("Unknown funct3: %03lb", funct3);
         }
     } break;
     case 0b0000111: // FpLoad
@@ -457,12 +457,11 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     {
         off_rs2 = 32;
         mem_addr = reg_val(insn->rs1) + insn->imm;
-        mem_dst_val = fpr_val(insn->rs2);
         const uint64_t funct3 = (insn->inst >> 12) & 0x07;
         switch (funct3) {
-        case 0b010: mem_dst_val = mem_dst_val & 0xffffffff; break; // FSW
-        case 0b011:                                         break; // FSD
-        default: ERR("Unknown funct3: 0x%lx", funct3);
+        case 0b010: mem_dst_size = 4; break; // FSW
+        case 0b011: mem_dst_size = 8; break; // FSD
+        default: ERR("Unknown funct3: %03lb", funct3);
         }
     } break;
     case 0b1000011: // FMADD.S
@@ -507,26 +506,17 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     }
     case 0b0101111: // ATOMIC
     {
-        const int funct3 = (insn->inst >> 12) & 0x07;
-        const int funct5 = (insn->inst >> 27) & 0x1f;
         mem_addr = reg_val(insn->rs1);
-        uint64_t mem_val = 0;
-        qemu_plugin_read_memory((uint8_t *)&mem_val, mem_addr, sizeof(mem_val));
         need_mem_src_val = true;
-        mem_dst_val = xpr_val(insn->rs2);
-        switch (funct5) {
-        case 0b00000: // AMOADD.D, AMOADD.W
-            switch (funct3) {
-            case 0b010: mem_dst_val = (mem_dst_val & 0xffffffff) + (mem_val & 0xffffffff); break; // AMOADD.W
-            case 0b011: mem_dst_val =  mem_dst_val + mem_val;                              break; // AMOADD.D
-            default: ERR("Unknown funct3: %03b", funct3);
-            }
-            break;
-        case 0b11100: // AMOMAXU.D, AMOMAXU.W
-            break;
-        default: ERR("Unknown funct5: %05b", funct5);
+        const int funct3 = (insn->inst >> 12) & 0x07;
+        switch (funct3) {
+        case 0b010: mem_dst_size = 4; break;
+        case 0b011: mem_dst_size = 8; break;
+        default: ERR("Unknown funct3: %03b", funct3);
         }
     } break;
+    case 0b0001111: // FENCE
+        break;
     default: ERR("Unknown opcode: 0x%lx (%lb)", insn->inst, insn->inst & 0x7f);
     }
     // clang-format off
@@ -542,6 +532,9 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             rs2, rs3, insn->imm, insn->op);
         u64 dst_val = reg_val(rd);
         u64 mem_src_val = need_mem_src_val ? dst_val : 0;
+        u64 mem_dst_val = 0;
+        if (mem_dst_size > 0)
+            qemu_plugin_read_memory((uint8_t *)&mem_dst_val, mem_addr, mem_dst_size);
         InputOp op(pc, npc, insn->inst, {rs1, rs2, rs3, 0}, {rd, 0},
                    {rs1_val, rs2_val, rs3_val, 0}, {dst_val, 0},
                    (u64)insn->imm, mem_addr, mem_src_val, mem_dst_val);
