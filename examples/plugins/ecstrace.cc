@@ -18,6 +18,7 @@
 #include <iostream>
 #include <optional>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -337,6 +338,23 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     }
 }
 
+static int walk_record_memory(void *_mapped_mem, uint64_t start, uint64_t end,
+                              unsigned long protection) {
+    const bool readable = protection & 0x1;
+    if (!readable) {
+        WARN("Memory region (0x%lx - 0x%lx) is not readable", start, end);
+        return 0;
+    }
+    auto &mapped_mem =
+        *static_cast<std::unordered_map<u64, std::vector<u8>> *>(_mapped_mem);
+    const u64 size = end - start;
+    std::vector<u8> buf(size);
+    assert(qemu_plugin_read_memory(buf.data(), start, size) == 0 &&
+           "Failed to read memory");
+    mapped_mem[start] = buf;
+    return 0;
+}
+
 static void vcpu_insn_exec(unsigned int, void *udata) {
     // #define DBG(fmt, ...) DEBUG(fmt, ##__VA_ARGS__)
 #define DBG(fmt, ...)                                                          \
@@ -395,8 +413,13 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         const int funct3 = (insn->inst >> 12) & 0x07;
         switch (funct3) {
         case 0b000: // ECALL
+        {
             std::array<u64, 64> cur_xpr_fpr;
             for (int i = 0; i < 64; i++) cur_xpr_fpr[i] = reg_val(i);
+
+            auto cur_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
+            qemu_plugin_walk_memory_regions((void *)&cur_mapped_mem, walk_record_memory);
+
             ctx.pending_trace = [=](const rv_decode *next_insn) {
                 u8 changed_reg = 0;
                 for (int i = 0; i < 64; i++) {
@@ -406,6 +429,20 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                         changed_reg = i;
                     }
                 }
+#if 0
+                auto updated_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
+                qemu_plugin_walk_memory_regions((void *)&updated_mapped_mem, walk_record_memory);
+
+                // TODO: Compare memory state and save changed region if any
+
+                // for (const auto &[addr, buf] : cur_mapped_mem) {
+                //     for (size_t i = 0; i < buf.size(); i++) {
+                //         if (updated_mapped_mem.at(addr)[i] != buf[i]) {
+                //             std::cout << std::hex << "Memory state changed at 0x" << addr + i << std::endl;
+                //         }
+                //     }
+                // }
+#endif
                 const auto pc = insn->pc;
                 const auto npc = next_insn ? next_insn->pc : 0;
                 u64 changed_val = reg_val(changed_reg);
@@ -413,7 +450,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                            {0, 0, 0, 0}, {changed_val, 0}, 0, 0, 0, 0);
                 ctx.trace_file.write((const char *)&op, sizeof(op));
             };
-            return;
+        } return;
         case 0b001: // CSRRW
         case 0b010: // CSRRS
             break;
