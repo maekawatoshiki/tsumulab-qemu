@@ -76,6 +76,12 @@ struct InputOp { // 80 Bytes
     }
 };
 
+const size_t page_size = 4096;
+struct Page {
+    u64 addr;
+    u8 data[page_size];
+};
+
 class Ctx {
   public:
     Ctx() {
@@ -237,35 +243,22 @@ static void dump_register_file() {
     ctx.reg_state_file.write((const char *)&frm, sizeof(frm));
 }
 
-static int walk_dump_memory(void *, uint64_t start, uint64_t end,
-                            unsigned long protection) {
-    if (!ctx.mem_state_file.is_open())
-        return 0;
-
-    const size_t page_size = 4096;
-    struct Page {
-        u64 addr;
-        u8 data[page_size];
-    };
-
-    INFO("Dump memory region (0x%lx - 0x%lx)", start, end);
-    if (!(protection & 0x1)) {
-        WARN("Memory region is not readable");
+static int walk_record_memory(void *_mapped_mem, uint64_t start, uint64_t end,
+                              unsigned long protection) {
+    const bool readable = protection & 0x1;
+    INFO("Reading memory region (0x%lx - 0x%lx)", start, end);
+    if (!readable) {
+        WARN("Memory region (0x%lx - 0x%lx) is not readable", start, end);
         return 0;
     }
-    const uint64_t size = end - start;
-    uint8_t *buf = (uint8_t *)malloc(size);
-    assert(qemu_plugin_read_memory(buf, start, size) == 0 &&
+    auto &mapped_mem =
+        *reinterpret_cast<std::unordered_map<u64, std::vector<u8>> *>(
+            _mapped_mem);
+    const u64 size = end - start;
+    std::vector<u8> buf(size);
+    assert(qemu_plugin_read_memory(buf.data(), start, size) == 0 &&
            "Failed to read memory");
-    assert(size % page_size == 0);
-
-    for (u64 addr = start; addr < end; addr += page_size) {
-        Page page = {.addr = addr, .data = {}};
-        memcpy(page.data, buf + (addr - start), page_size);
-        ctx.mem_state_file.write((const char *)&page, sizeof(page));
-    }
-
-    free(buf);
+    mapped_mem[start] = buf;
     return 0;
 }
 
@@ -275,7 +268,19 @@ static void dump_memory() {
 
     const char header[16 + 1] = "RISC-V mem   0.0";
     ctx.mem_state_file.write((const char *)&header, 16);
-    qemu_plugin_walk_memory_regions(nullptr, walk_dump_memory);
+
+    auto mapped_mem = std::unordered_map<u64, std::vector<u8>>();
+    qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&mapped_mem),
+                                    walk_record_memory);
+
+    for (const auto &[addr, buf] : mapped_mem) {
+        assert(buf.size() % page_size == 0);
+        for (size_t i = 0; i < buf.size(); i += page_size) {
+            Page page = {.addr = addr + i, .data = {}};
+            memcpy(page.data, buf.data() + i, page_size);
+            ctx.mem_state_file.write((const char *)&page, sizeof(page));
+        }
+    }
 }
 
 static void dump_state() {
@@ -336,23 +341,6 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
 #endif
         }
     }
-}
-
-static int walk_record_memory(void *_mapped_mem, uint64_t start, uint64_t end,
-                              unsigned long protection) {
-    const bool readable = protection & 0x1;
-    if (!readable) {
-        WARN("Memory region (0x%lx - 0x%lx) is not readable", start, end);
-        return 0;
-    }
-    auto &mapped_mem =
-        *static_cast<std::unordered_map<u64, std::vector<u8>> *>(_mapped_mem);
-    const u64 size = end - start;
-    std::vector<u8> buf(size);
-    assert(qemu_plugin_read_memory(buf.data(), start, size) == 0 &&
-           "Failed to read memory");
-    mapped_mem[start] = buf;
-    return 0;
 }
 
 static void vcpu_insn_exec(unsigned int, void *udata) {
@@ -418,7 +406,8 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             for (int i = 0; i < 64; i++) cur_xpr_fpr[i] = reg_val(i);
 
             auto cur_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
-            qemu_plugin_walk_memory_regions((void *)&cur_mapped_mem, walk_record_memory);
+            qemu_plugin_walk_memory_regions(
+                reinterpret_cast<void *>(&cur_mapped_mem), walk_record_memory);
 
             ctx.pending_trace = [=](const rv_decode *next_insn) {
                 u8 changed_reg = 0;
@@ -431,7 +420,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
                 }
 #if 0
                 auto updated_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
-                qemu_plugin_walk_memory_regions((void *)&updated_mapped_mem, walk_record_memory);
+                qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&updated_mapped_mem), walk_record_memory);
 
                 // TODO: Compare memory state and save changed region if any
 
