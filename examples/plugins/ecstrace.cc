@@ -38,6 +38,10 @@
     fprintf(stderr, "[%s:%-4d] \033[1;34m[DEBUG]\033[0m " fmt "\n", __FILE__,  \
             __LINE__, ##__VA_ARGS__)
 
+#define TRACE_HEADER "RISC-V trace 0.1"
+#define REG_HEADER "RISC-V reg   0.1"
+#define MEM_HEADER "RISC-V mem   0.1"
+
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
@@ -46,8 +50,8 @@ typedef uint8_t u8;
 struct InputOp { // 80 Bytes
     u64 ip;
     u64 next_ip;
-    u8 reservedA[4] = {};
     u32 instruction_word;
+    u8 reservedA[4] = {};
     u8 logical_src_reg[4];
     u8 logical_dst_reg[2];
     u8 reservedB[2] = {};
@@ -79,7 +83,13 @@ struct InputOp { // 80 Bytes
 const size_t page_size = 4096;
 struct Page {
     u64 addr;
+    u64 nthEcall; // 0: initial state, 1: after first ecall, ...
     u8 data[page_size];
+
+    Page(u64 addr, u64 nth_ecall, const u8 *data)
+        : addr(addr), nthEcall(nth_ecall) {
+        memcpy(this->data, data, page_size);
+    }
 };
 
 class Ctx {
@@ -93,7 +103,7 @@ class Ctx {
         this->trace_file.open(trace_path ? trace_path : "output.trace",
                               std::ios::binary);
         assert(this->trace_file.is_open());
-        this->trace_file.write("RISC-V trace 0.0", 16);
+        this->trace_file.write(TRACE_HEADER, 16);
 
         const auto entry_addr_str = std::getenv("TRACE_MAIN_ENTRY_ADDR");
         if (entry_addr_str) {
@@ -137,6 +147,8 @@ class Ctx {
     bool trace_enabled = false;
 
     GByteArray *reg_buf;
+
+    u64 num_ecalls = 0;
 };
 
 static Ctx ctx;
@@ -218,8 +230,7 @@ static void dump_register_file() {
     if (!ctx.reg_state_file.is_open())
         return;
 
-    const char header[16 + 1] = "RISC-V reg   0.0";
-    ctx.reg_state_file.write((const char *)&header, 16);
+    ctx.reg_state_file.write(REG_HEADER, 16);
 
     const uint64_t pc = xpr_val(/*pc=*/32);
     ctx.reg_state_file.write((const char *)&pc, sizeof(pc));
@@ -266,8 +277,7 @@ static void dump_memory() {
     if (!ctx.mem_state_file.is_open())
         return;
 
-    const char header[16 + 1] = "RISC-V mem   0.0";
-    ctx.mem_state_file.write((const char *)&header, 16);
+    ctx.mem_state_file.write(MEM_HEADER, 16);
 
     auto mapped_mem = std::unordered_map<u64, std::vector<u8>>();
     qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&mapped_mem),
@@ -276,8 +286,7 @@ static void dump_memory() {
     for (const auto &[addr, buf] : mapped_mem) {
         assert(buf.size() % page_size == 0);
         for (size_t i = 0; i < buf.size(); i += page_size) {
-            Page page = {.addr = addr + i, .data = {}};
-            memcpy(page.data, buf.data() + i, page_size);
+            Page page(addr + i, 0, buf.data() + i);
             ctx.mem_state_file.write((const char *)&page, sizeof(page));
         }
     }
@@ -310,7 +319,6 @@ static void dump_state() {
     dump_register_file();
     dump_memory();
 
-    ctx.mem_state_file.close();
     ctx.reg_state_file.close();
 }
 
@@ -402,36 +410,50 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         switch (funct3) {
         case 0b000: // ECALL
         {
-            std::array<u64, 64> cur_xpr_fpr;
-            for (int i = 0; i < 64; i++) cur_xpr_fpr[i] = reg_val(i);
+            ctx.num_ecalls++;
 
-            auto cur_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
+            std::array<u64, 64> prev_xpr_fpr;
+            for (int i = 0; i < 64; i++) prev_xpr_fpr[i] = reg_val(i);
+
+            auto prev_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
             qemu_plugin_walk_memory_regions(
-                reinterpret_cast<void *>(&cur_mapped_mem), walk_record_memory);
+                reinterpret_cast<void *>(&prev_mapped_mem), walk_record_memory);
 
             ctx.pending_trace = [=](const rv_decode *next_insn) {
+                // Save the modified memory
+                auto modified_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
+                qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&modified_mapped_mem), walk_record_memory);
+
+                std::vector<Page> changed_pages;
+                for (const auto &[addr, buf] : modified_mapped_mem) {
+                    if (!prev_mapped_mem.count(addr)) {
+                        for (size_t i = 0; i < buf.size(); i += page_size)
+                            changed_pages.push_back(Page(addr + i, ctx.num_ecalls, buf.data() + i));
+                        continue;
+                    }
+                    const auto &prev_buf = prev_mapped_mem.at(addr);
+                    for (size_t i = 0; i < buf.size(); i += page_size) {
+                        if (i < prev_buf.size()) {
+                            if (memcmp(buf.data() + i, prev_buf.data() + i, page_size) != 0)
+                                changed_pages.push_back(Page(addr + i, ctx.num_ecalls, buf.data() + i));
+                        } else {
+                            changed_pages.push_back(Page(addr + i, ctx.num_ecalls, buf.data() + i));
+                        }
+                    }
+                }
+                for (const auto &page : changed_pages)
+                    ctx.mem_state_file.write(reinterpret_cast<const char *>(&page), sizeof(page));
+
+                // Find the modified register
                 u8 changed_reg = 0;
                 for (int i = 0; i < 64; i++) {
                     u64 new_xpr_fpr = reg_val(i);
-                    if (cur_xpr_fpr[i] != new_xpr_fpr) {
+                    if (prev_xpr_fpr[i] != new_xpr_fpr) {
                         assert(changed_reg == 0 && "Only one register should be modified");
                         changed_reg = i;
                     }
                 }
-#if 0
-                auto updated_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
-                qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&updated_mapped_mem), walk_record_memory);
 
-                // TODO: Compare memory state and save changed region if any
-
-                // for (const auto &[addr, buf] : cur_mapped_mem) {
-                //     for (size_t i = 0; i < buf.size(); i++) {
-                //         if (updated_mapped_mem.at(addr)[i] != buf[i]) {
-                //             std::cout << std::hex << "Memory state changed at 0x" << addr + i << std::endl;
-                //         }
-                //     }
-                // }
-#endif
                 const auto pc = insn->pc;
                 const auto npc = next_insn ? next_insn->pc : 0;
                 u64 changed_val = reg_val(changed_reg);
@@ -628,6 +650,7 @@ static void plugin_exit(qemu_plugin_id_t, void *) {
         trace(nullptr);
     }
 
+    ctx.mem_state_file.close();
     ctx.trace_file.close();
 }
 
