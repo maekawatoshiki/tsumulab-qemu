@@ -62,22 +62,16 @@ struct InputOp { // 80 Bytes
     u64 mem_src_value;
     u64 mem_dst_value;
 
-    InputOp(u64 ip, u64 next_ip, u32 instruction_word,
-            std::array<u8, 4> src_reg, std::array<u8, 2> dst_reg,
-            std::array<u64, 4> src_val, std::array<u64, 2> dst_val, u64 imm,
-            u64 mem_addr, u64 mem_src_val, u64 mem_dst_val)
+    constexpr InputOp(u64 ip, u64 next_ip, u32 instruction_word,
+                      std::array<u8, 4> src_reg, std::array<u8, 2> dst_reg,
+                      std::array<u64, 4> src_val, std::array<u64, 2> dst_val,
+                      u64 imm, u64 mem_addr, u64 mem_src_val, u64 mem_dst_val)
         : ip(ip), next_ip(next_ip), instruction_word(instruction_word),
-          imm(imm), mem_addr(mem_addr), mem_src_value(mem_src_val),
-          mem_dst_value(mem_dst_val) {
-        for (int i = 0; i < 4; i++) {
-            this->logical_src_reg[i] = src_reg[i];
-            this->src_value[i] = src_val[i];
-        }
-        for (int i = 0; i < 2; i++) {
-            this->logical_dst_reg[i] = dst_reg[i];
-            this->dst_value[i] = dst_val[i];
-        }
-    }
+          logical_src_reg{src_reg[0], src_reg[1], src_reg[2], src_reg[3]},
+          logical_dst_reg{dst_reg[0], dst_reg[1]},
+          src_value{src_val[0], src_val[1], src_val[2], src_val[3]},
+          dst_value{dst_val[0], dst_val[1]}, imm(imm), mem_addr(mem_addr),
+          mem_src_value(mem_src_val), mem_dst_value(mem_dst_val) {}
 };
 
 const size_t page_size = 4096;
