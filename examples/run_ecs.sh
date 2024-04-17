@@ -19,7 +19,9 @@ export TRACE_PATH="${TRACE_DIR}/${BIN}.trace"
 
 mkdir -p "${TRACE_DIR}"
 
-if [ ! -f "${MEM_STATE_PATH}" ] || [ ! -f "${REG_STATE_PATH}" ] || [ ! -f "${TRACE_PATH}.xz" ]; then
+FORCE_RETRACE=${FORCE_RETRACE:-0}
+
+if [ "${FORCE_RETRACE}" -ne 0 ] || [ ! -f "${MEM_STATE_PATH}" ] || [ ! -f "${REG_STATE_PATH}" ] || [ ! -f "${TRACE_PATH}.xz" ]; then
     rm -f ${MEM_STATE_PATH} ${REG_STATE_PATH} ${TRACE_PATH}
 
     mkfifo "${TRACE_PATH}"
