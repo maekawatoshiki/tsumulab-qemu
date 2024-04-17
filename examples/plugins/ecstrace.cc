@@ -76,12 +76,11 @@ struct InputOp { // 80 Bytes
 
 const size_t page_size = 4096;
 struct Page {
+    u64 version; // 0: initial state, 1: after first ecall, ...
     u64 addr;
-    u64 nthEcall; // 0: initial state, 1: after first ecall, ...
     u8 data[page_size];
 
-    Page(u64 addr, u64 nth_ecall, const u8 *data)
-        : addr(addr), nthEcall(nth_ecall) {
+    Page(u64 addr, u64 version, const u8 *data) : version(version), addr(addr) {
         memcpy(this->data, data, page_size);
     }
 };
