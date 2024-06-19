@@ -19,4 +19,4 @@ else
     )
 fi
 
-(cd examples && make trace_plugin -j)
+(cd examples && make cvp_trace_plugin -j)
