@@ -25,11 +25,20 @@ run_trace: format fibo cvp_trace_plugin #! Generate trace for fibo
 run_ecs_trace: format fibo ecs_trace_plugin #! Generate trace for fibo
 	../build/qemu-riscv$(BITS) -one-insn-per-tb -d plugin -plugin ./plugins/libecstrace.so fibo
 
+run_bbv: bbv_plugin #! Generate bbv
+ifndef BIN
+	$(error BIN is not set)
+endif
+	../build/qemu-x86_64 -one-insn-per-tb -d plugin -plugin ./plugins/libbbv.so $(BIN)
+
 cvp_trace_plugin: #! Build trace plugin
 	make libtrace.so -C ./plugins
 
 ecs_trace_plugin: #! Build trace plugin
 	make libecstrace.so -C ./plugins
+
+bbv_plugin: #! Build bbv plugin
+	make libbbv.so -C ./plugins
 
 clean: #! Remove generated binaries
 	rm -f fibo
