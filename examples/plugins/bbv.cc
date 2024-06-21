@@ -38,25 +38,16 @@
     fprintf(stderr, "[%s:%-4d] \033[1;34m[DEBUG]\033[0m " fmt "\n", __FILE__,  \
             __LINE__, ##__VA_ARGS__)
 
-#define TRACE_HEADER "RISC-V trace 0.1"
-#define REG_HEADER "RISC-V reg   0.1"
-#define MEM_HEADER "RISC-V mem   0.1"
-
 typedef uint64_t u64;
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint8_t u8;
 
-void dump();
-
 class Ctx {
   public:
-    Ctx() {
-    }
-    // NOTE: This destructor is not called on program exit.
+    Ctx() {}
+    // NOTE: Destructor is not called on program exit.
     // ~Ctx() {
-    //     this->trace_file.flush();
-    //     this->trace_file.close();
     // }
 
     int bits;
@@ -68,9 +59,7 @@ class Ctx {
 
 static Ctx ctx;
 
-//
-// Plugin callbacks
-//
+void dump();
 
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     (void)(id);
@@ -80,26 +69,25 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
         int num_reg_files;
         const qemu_plugin_register_file_t *reg_files =
             qemu_plugin_get_register_files(vcpu_index, &num_reg_files);
-        // org.gnu.gdb.riscv.cpu
-        // org.gnu.gdb.riscv.fpu
-        // org.gnu.gdb.riscv.virtual
-        // org.gnu.gdb.riscv.csr
         for (int i = 0; i < num_reg_files; i++) {
             const qemu_plugin_register_file_t *reg_file = &reg_files[i];
             DEBUG("%s (%d registers)", reg_file->name, reg_file->num_regs);
 #if 0
-        for (int k = 0; k < reg_file->num_regs; k++) {
-            DEBUG("%d (%d) th register: %s", k, reg_file->base_reg + k,
-                  reg_file->regs[k]);
-        }
+            for (int k = 0; k < reg_file->num_regs; k++) {
+                DEBUG("%d (%d) th register: %s", k, reg_file->base_reg + k,
+                        reg_file->regs[k]);
+            }
 #endif
         }
     }
 }
 
+//
+// Plugin callbacks
+//
+
 static void vcpu_insn_exec(unsigned int, void *udata) {
-    struct qemu_plugin_insn *insn = (struct qemu_plugin_insn *)udata;
-    const uint64_t ip = qemu_plugin_insn_vaddr(insn);
+    const uint64_t ip = *(uint64_t *)udata;
 
     ctx.num_insns++;
 
@@ -109,14 +97,14 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
 
     if (ctx.ip2bb.find(ip) != ctx.ip2bb.end()) {
         ctx.bb2count[ctx.ip2bb[ip]]++;
-        // DEBUG("jmp not happened 0x%lx, bb = %d, count = %d", ip, ctx.ip2bb[ip], ctx.bb2count[ctx.ip2bb[ip]]);
     } else if (abs((int64_t)ip - (int64_t)ctx.prev_ip) >= 16) {
         if (ctx.ip2bb.find(ip) == ctx.ip2bb.end()) {
             ctx.ip2bb[ip] = ctx.ip2bb.size();
         }
         ctx.bb2count[ctx.ip2bb[ip]]++;
-        // DEBUG("jmp happened 0x%lx, diff = %ld, bb = %d, count = %d", ip, (int64_t)ip - (int64_t)ctx.prev_ip, ctx.ip2bb[ip], ctx.bb2count[ctx.ip2bb[ip]]);
     }
+
+    // DEBUG("ip=0x%lx, diff=%ld, bb=%d, count=%d", ip, (int64_t)ip - (int64_t)ctx.prev_ip, ctx.ip2bb[ip], ctx.bb2count[ctx.ip2bb[ip]]);
 
     ctx.prev_ip = ip;
 }
@@ -144,46 +132,47 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
          * We only consider the first 32 bits of the instruction, this may be
          * a limitation for CISC architectures.
          */
-        // insn = qemu_plugin_tb_get_insn(tb, i);
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
 
-        // NOTE: We will never free `dec`.
-        // rv_decode *dec = (rv_decode *)malloc(sizeof(rv_decode));
-        // qemu_plugin_insn_decode(insn, dec);
 #if 0
-    DEBUG("Disas: %s", qemu_plugin_insn_disas(insn));
+        DEBUG("Disas: %s", qemu_plugin_insn_disas(insn));
 #endif
 
         /* Register callback on instruction */
+        uint64_t *ip = (uint64_t *)malloc(sizeof(uint64_t));
+        *ip = (uint64_t)qemu_plugin_insn_vaddr(insn);
         qemu_plugin_register_vcpu_insn_exec_cb(insn, vcpu_insn_exec,
-                                               QEMU_PLUGIN_CB_R_REGS, insn);
+                                               QEMU_PLUGIN_CB_R_REGS, ip);
     }
 }
 
 void dump() {
-  FILE *bbv_out = fopen("out.bb", "a");
-  std::vector<std::pair<uint64_t, uint64_t>> bbv(ctx.bb2count.begin(), ctx.bb2count.end());
-  std::sort(bbv.begin(), bbv.end(), [](const std::pair<uint64_t, uint64_t> &a, const std::pair<uint64_t, uint64_t> &b) { return a.first < b.first; });
-  fprintf(bbv_out, "T");
-  for (auto &bbfq : bbv) {
-    const auto bb = bbfq.first;
-    const auto count = bbfq.second;
-    if (count == 0)
-      continue;
-    fprintf(bbv_out, ":%lu:%lu ", bb, count);
-  }
-  for (auto &bb : ctx.bb2count)
-    bb.second = 0;
-  fprintf(bbv_out, "\n");
-  fclose(bbv_out);
+    FILE *bbv_out = fopen("out.bb", "a");
+    std::vector<std::pair<uint64_t, uint64_t>> bbv(ctx.bb2count.begin(),
+                                                   ctx.bb2count.end());
+    std::sort(bbv.begin(), bbv.end(),
+              [](const std::pair<uint64_t, uint64_t> &a,
+                 const std::pair<uint64_t, uint64_t> &b) {
+                  return a.first < b.first;
+              });
+    fprintf(bbv_out, "T");
+    for (auto &bbfq : bbv) {
+        const auto bb = bbfq.first;
+        const auto count = bbfq.second;
+        if (count == 0)
+            continue;
+        fprintf(bbv_out, ":%lu:%lu ", bb, count);
+    }
+    for (auto &entry : ctx.bb2count)
+        entry.second = 0;
+    fprintf(bbv_out, "\n");
+    fclose(bbv_out);
 }
 
 /**
  * On plugin exit, print last instruction in cache
  */
-static void plugin_exit(qemu_plugin_id_t, void *) {
-  dump();
-}
+static void plugin_exit(qemu_plugin_id_t, void *) { dump(); }
 
 extern "C" {
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
