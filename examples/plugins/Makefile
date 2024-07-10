@@ -4,8 +4,8 @@ ifndef QEMU_SRC
 QEMU_SRC := $(shell pwd)/../../
 endif
 
-CC := ccache gcc-12
-CXX := ccache g++-12
+CC := ccache gcc
+CXX := ccache g++
 
 NAMES := execlog trace
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
