@@ -79,10 +79,6 @@ struct Page {
     u64 version; // 0: initial state, 1: after first ecall, ...
     u64 addr;
     u8 data[page_size];
-
-    Page(u64 addr, u64 version, const u8 *data) : version(version), addr(addr) {
-        memcpy(this->data, data, page_size);
-    }
 };
 
 class Ctx {
@@ -142,6 +138,7 @@ class Ctx {
     GByteArray *reg_buf;
 
     u64 num_ecalls = 0;
+    std::unordered_map<u64, Page> pages;
 };
 
 static Ctx ctx;
@@ -247,44 +244,6 @@ static void dump_register_file() {
     ctx.reg_state_file.write((const char *)&frm, sizeof(frm));
 }
 
-static int walk_record_memory(void *_mapped_mem, uint64_t start, uint64_t end,
-                              unsigned long protection) {
-    const bool readable = protection & 0x1;
-    INFO("Reading memory region (0x%lx - 0x%lx)", start, end);
-    if (!readable) {
-        WARN("Memory region (0x%lx - 0x%lx) is not readable", start, end);
-        return 0;
-    }
-    auto &mapped_mem =
-        *reinterpret_cast<std::unordered_map<u64, std::vector<u8>> *>(
-            _mapped_mem);
-    const u64 size = end - start;
-    std::vector<u8> buf(size);
-    assert(qemu_plugin_read_memory(buf.data(), start, size) == 0 &&
-           "Failed to read memory");
-    mapped_mem[start] = buf;
-    return 0;
-}
-
-static void dump_memory() {
-    if (!ctx.mem_state_file.is_open())
-        return;
-
-    ctx.mem_state_file.write(MEM_HEADER, 16);
-
-    auto mapped_mem = std::unordered_map<u64, std::vector<u8>>();
-    qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&mapped_mem),
-                                    walk_record_memory);
-
-    for (const auto &[addr, buf] : mapped_mem) {
-        assert(buf.size() % page_size == 0);
-        for (size_t i = 0; i < buf.size(); i += page_size) {
-            Page page(addr + i, 0, buf.data() + i);
-            ctx.mem_state_file.write((const char *)&page, sizeof(page));
-        }
-    }
-}
-
 static void dump_state() {
     assert(!ctx.mem_state_file.is_open() &&
            "Memory state file is already open");
@@ -310,9 +269,9 @@ static void dump_state() {
     }
 
     dump_register_file();
-    dump_memory();
-
     ctx.reg_state_file.close();
+
+    ctx.mem_state_file.write(MEM_HEADER, 16);
 }
 
 //
@@ -408,34 +367,17 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             std::array<u64, 64> prev_xpr_fpr;
             for (int i = 0; i < 64; i++) prev_xpr_fpr[i] = reg_val(i);
 
-            auto prev_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
-            qemu_plugin_walk_memory_regions(
-                reinterpret_cast<void *>(&prev_mapped_mem), walk_record_memory);
-
             ctx.pending_trace = [=](const rv_decode *next_insn) {
-                // Save the modified memory
-                auto modified_mapped_mem = std::unordered_map<u64, std::vector<u8>>();
-                qemu_plugin_walk_memory_regions(reinterpret_cast<void *>(&modified_mapped_mem), walk_record_memory);
-
                 std::vector<Page> changed_pages;
-                for (const auto &[addr, buf] : modified_mapped_mem) {
-                    if (!prev_mapped_mem.count(addr)) {
-                        for (size_t i = 0; i < buf.size(); i += page_size)
-                            changed_pages.push_back(Page(addr + i, ctx.num_ecalls, buf.data() + i));
-                        continue;
-                    }
-                    const auto &prev_buf = prev_mapped_mem.at(addr);
-                    for (size_t i = 0; i < buf.size(); i += page_size) {
-                        if (i < prev_buf.size()) {
-                            if (memcmp(buf.data() + i, prev_buf.data() + i, page_size) != 0)
-                                changed_pages.push_back(Page(addr + i, ctx.num_ecalls, buf.data() + i));
-                        } else {
-                            changed_pages.push_back(Page(addr + i, ctx.num_ecalls, buf.data() + i));
-                        }
+                for (auto &[addr, page] : ctx.pages) {
+                    u8 data[page_size];
+                    qemu_plugin_read_memory(data, addr, page_size);
+                    if (memcmp(data, page.data, page_size) != 0) {
+                        memcpy(page.data, data, page_size);
+                        page.version = ctx.num_ecalls;
+                        ctx.mem_state_file.write(reinterpret_cast<const char *>(&page), sizeof(page));
                     }
                 }
-                for (const auto &page : changed_pages)
-                    ctx.mem_state_file.write(reinterpret_cast<const char *>(&page), sizeof(page));
 
                 // Find the modified register
                 u8 changed_reg = 0;
@@ -581,8 +523,19 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         u64 dst_val = reg_val(rd);
         u64 mem_src_val = need_mem_src_val ? dst_val : 0;
         u64 mem_dst_val = 0;
-        if (mem_dst_size > 0)
-            qemu_plugin_read_memory((uint8_t *)&mem_dst_val, mem_addr, mem_dst_size);
+        if (mem_dst_size || need_mem_src_val) {
+            u64 page_addr = mem_addr - mem_addr % page_size;
+            auto [it, inserted] = ctx.pages.emplace(page_addr, Page {ctx.num_ecalls, page_addr, {}});
+            if (inserted) {
+                qemu_plugin_read_memory(it->second.data, page_addr, page_size);
+                ctx.mem_state_file.write(reinterpret_cast<const char *>(&it->second), sizeof(it->second));
+            }
+            if (mem_dst_size > 0) {
+                qemu_plugin_read_memory((uint8_t *)&mem_dst_val, mem_addr, mem_dst_size);
+                memcpy(it->second.data + mem_addr % page_size,
+                       &mem_dst_val, mem_dst_size);
+            }
+        }
         u64 fflags_val = 0;
         if (fflags > 0)
             fflags_val = reg_val(fflags);
