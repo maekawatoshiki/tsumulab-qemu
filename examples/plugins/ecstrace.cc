@@ -138,6 +138,7 @@ class Ctx {
     uint64_t num_insns_from_entry = 0;
     uint64_t entry_addr = 0, exit_addr = 0;
     bool trace_enabled = false;
+    bool state_dumped = false;
 
     GByteArray *reg_buf;
 
@@ -361,7 +362,6 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         ctx.exit_addr = ctx.prev_insn->pc + 4;
         INFO("Entry address (0x%lx) reached, enabling tracing", ctx.entry_addr);
         INFO("Setting exit address to 0x%lx", ctx.exit_addr);
-        dump_state();
     }
     if (insn->pc == ctx.exit_addr) {
         INFO("Exit address (0x%lx) reached, disabling tracing", ctx.exit_addr);
@@ -380,6 +380,11 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
 
     if (ctx.num_insns_from_entry++ < ctx.skip_first_n_insns_from_entry)
         return;
+
+    if (!ctx.state_dumped) {
+        dump_state();
+        ctx.state_dumped = true;
+    }
 
     if (is_compressed) {
         ERR("Compressed instruction is not supported");
