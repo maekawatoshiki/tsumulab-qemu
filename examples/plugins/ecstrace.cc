@@ -1,6 +1,3 @@
-#include "disas/riscv.h"
-#include "qemu/qemu-plugin.h"
-
 #include <assert.h>
 #include <cstdint>
 #include <cstdlib>
@@ -22,21 +19,20 @@
 #include <utility>
 #include <vector>
 
-#define ERR(fmt, ...)                                                          \
-    do {                                                                       \
-        fprintf(stderr, "[%s:%-4d] \033[1;31m[  ERR]\033[0m " fmt "\n",        \
-                __FILE__, __LINE__, ##__VA_ARGS__);                            \
-        exit(1);                                                               \
+G_BEGIN_DECLS // NOTE: Treat the header below as C code
+#include "qemu/qemu-plugin.h"
+G_END_DECLS
+
+#include "disas/riscv.h"
+
+#define ERR(fmt, ...)                                                                                       \
+    do {                                                                                                    \
+        fprintf(stderr, "[%s:%-4d] \033[1;31m[  ERR]\033[0m " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+        exit(1);                                                                                            \
     } while (0)
-#define INFO(fmt, ...)                                                         \
-    fprintf(stderr, "[%s:%-4d] \033[1;32m[ INFO]\033[0m " fmt "\n", __FILE__,  \
-            __LINE__, ##__VA_ARGS__)
-#define WARN(fmt, ...)                                                         \
-    fprintf(stderr, "[%s:%-4d] \033[1;33m[ WARN]\033[0m " fmt "\n", __FILE__,  \
-            __LINE__, ##__VA_ARGS__)
-#define DEBUG(fmt, ...)                                                        \
-    fprintf(stderr, "[%s:%-4d] \033[1;34m[DEBUG]\033[0m " fmt "\n", __FILE__,  \
-            __LINE__, ##__VA_ARGS__)
+#define INFO(fmt, ...) fprintf(stderr, "[%s:%-4d] \033[1;32m[ INFO]\033[0m " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#define WARN(fmt, ...) fprintf(stderr, "[%s:%-4d] \033[1;33m[ WARN]\033[0m " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
+#define DEBUG(fmt, ...) fprintf(stderr, "[%s:%-4d] \033[1;34m[DEBUG]\033[0m " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__)
 
 #define TRACE_HEADER "RISC-V trace 0.1"
 #define REG_HEADER "RISC-V reg   0.1"
@@ -136,6 +132,7 @@ class Ctx {
     bool trace_enabled = false;
 
     GByteArray *reg_buf;
+    std::vector<struct qemu_plugin_register *> reg_list;
 
     u64 num_ecalls = 0;
     std::unordered_map<u64, Page> pages;
@@ -145,46 +142,11 @@ static Ctx ctx;
 
 //
 // Utils for reading register values
-// TODO: {csr,xpr,fpr}_val() should be merged into reg_val().
 //
 
-static uint64_t csr_val(const uint8_t reg) {
-    const int n = qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + /*pc=*/1 +
-                                                             0x20 + /*priv=*/1);
-    int64_t ret;
-    switch (n) {
-    case 8:
-        ret = *((int64_t *)ctx.reg_buf->data);
-        break;
-    default:
-        ERR("Read bytes: %d. CSR must be 64 bits", n);
-    }
-    g_byte_array_set_size(ctx.reg_buf, 0);
-    return ret;
-}
-
-static uint64_t xpr_val(const uint8_t reg) {
-    assert(reg <= 0x20); // 0x20 for pc
-    const int n = qemu_plugin_read_register(ctx.reg_buf, reg);
-    uint64_t ret;
-    switch (n) {
-    case 4:
-        ret = *((uint32_t *)ctx.reg_buf->data);
-        break;
-    case 8:
-        ret = *((uint64_t *)ctx.reg_buf->data);
-        break;
-    default:
-        ERR("Read bytes: %d. XPR must be 32 or 64 bits", n);
-    }
-    g_byte_array_set_size(ctx.reg_buf, 0);
-    return ret;
-}
-
-static uint64_t fpr_val(const uint8_t reg) {
-    assert(reg < 0x20);
-    const int n =
-        qemu_plugin_read_register(ctx.reg_buf, reg + 0x20 + /* pc = */ 1);
+static u64 reg_val(const uint8_t reg) {
+    // 0~31: XPR, 32~63: FPR, 64: PC, 65: fflags, 66: frm, 67: fcsr, ...
+    const int n = qemu_plugin_read_register(ctx.reg_list[reg], ctx.reg_buf);
     uint64_t ret = 0;
     switch (n) {
     case 4:
@@ -194,22 +156,10 @@ static uint64_t fpr_val(const uint8_t reg) {
         ret = *((uint64_t *)ctx.reg_buf->data);
         break;
     default:
-        ERR("Read bytes: %d. FPR must be 32 or 64 bits", n);
+        ERR("Read bytes: %d. Must be 32 or 64 bits", n);
     }
     g_byte_array_set_size(ctx.reg_buf, 0);
     return ret;
-}
-
-static u64 reg_val(const uint8_t reg) {
-    // 0~31: XPR, 32~63: FPR, 64: PC, 65: fflags, 66: frm, 67: fcsr, ...
-    if (reg < 32)
-        return xpr_val(reg);
-    else if (reg < 64)
-        return fpr_val(reg - 32);
-    else if (reg == 64)
-        return xpr_val(32);
-    else
-        return csr_val(reg - 64); // reg=65 -> csr=1
 }
 
 //
@@ -222,23 +172,23 @@ static void dump_register_file() {
 
     ctx.reg_state_file.write(REG_HEADER, 16);
 
-    const uint64_t pc = xpr_val(/*pc=*/32);
+    const uint64_t pc = reg_val(/*pc=*/64);
     ctx.reg_state_file.write((const char *)&pc, sizeof(pc));
 
     // XPR 32 registers
     for (int i = 0; i < 32; i++) {
-        uint64_t val = xpr_val(i);
+        uint64_t val = reg_val(i);
         ctx.reg_state_file.write((const char *)&val, sizeof(val));
     }
     // FPR 32 registers
     for (int i = 0; i < 32; i++) {
-        uint64_t val = fpr_val(i);
+        uint64_t val = reg_val(i + 32);
         ctx.reg_state_file.write((const char *)&val, sizeof(val));
     }
 
     const uint64_t x = 0; // TODO: csr_val(0) returns 0 bytes
-    const uint64_t fflags = csr_val(1);
-    const uint64_t frm = csr_val(2);
+    const uint64_t fflags = reg_val(65);
+    const uint64_t frm = reg_val(66);
     ctx.reg_state_file.write((const char *)&x, sizeof(x));
     ctx.reg_state_file.write((const char *)&fflags, sizeof(fflags));
     ctx.reg_state_file.write((const char *)&frm, sizeof(frm));
@@ -282,25 +232,30 @@ static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index) {
     (void)(id);
     assert(vcpu_index == 0 && "Only one vCPU supported");
 
-    {
-        int num_reg_files;
-        const qemu_plugin_register_file_t *reg_files =
-            qemu_plugin_get_register_files(vcpu_index, &num_reg_files);
-        // org.gnu.gdb.riscv.cpu
-        // org.gnu.gdb.riscv.fpu
-        // org.gnu.gdb.riscv.virtual
-        // org.gnu.gdb.riscv.csr
-        for (int i = 0; i < num_reg_files; i++) {
-            const qemu_plugin_register_file_t *reg_file = &reg_files[i];
-            DEBUG("%s (%d registers)", reg_file->name, reg_file->num_regs);
-#if 0
-        for (int k = 0; k < reg_file->num_regs; k++) {
-            DEBUG("%d (%d) th register: %s", k, reg_file->base_reg + k,
-                  reg_file->regs[k]);
-        }
-#endif
-        }
+    const GArray *list_regs = qemu_plugin_get_registers();
+    assert(list_regs != nullptr);
+
+    for (size_t i = 0; i < 32; i++) {
+        const qemu_plugin_reg_descriptor *reg = &g_array_index(list_regs, qemu_plugin_reg_descriptor, i);
+        // DEBUG("Register: %s", reg->name);
+        ctx.reg_list.push_back(reg->handle);
     }
+    assert(g_array_index(list_regs, qemu_plugin_reg_descriptor, 0).name == std::string("zero"));
+    assert(g_array_index(list_regs, qemu_plugin_reg_descriptor, 31).name == std::string("t6"));
+    assert(g_array_index(list_regs, qemu_plugin_reg_descriptor, 32).name == std::string("pc"));
+
+    for (size_t i = 33; i < 33 + 32; i++) {
+        const qemu_plugin_reg_descriptor *reg = &g_array_index(list_regs, qemu_plugin_reg_descriptor, i);
+        // DEBUG("Register: %s", reg->name);
+        ctx.reg_list.push_back(reg->handle);
+    }
+    assert(g_array_index(list_regs, qemu_plugin_reg_descriptor, 33).name == std::string("ft0"));
+    assert(g_array_index(list_regs, qemu_plugin_reg_descriptor, 33 + 31).name == std::string("ft11"));
+
+    ctx.reg_list.push_back(g_array_index(list_regs, qemu_plugin_reg_descriptor, 32).handle);  // PC
+    ctx.reg_list.push_back(g_array_index(list_regs, qemu_plugin_reg_descriptor, 98).handle);  // fflags
+    ctx.reg_list.push_back(g_array_index(list_regs, qemu_plugin_reg_descriptor, 99).handle);  // frm
+    ctx.reg_list.push_back(g_array_index(list_regs, qemu_plugin_reg_descriptor, 100).handle); // fcsr
 }
 
 static void vcpu_insn_exec(unsigned int, void *udata) {
@@ -600,7 +555,6 @@ static void plugin_exit(qemu_plugin_id_t, void *) {
     ctx.trace_file.close();
 }
 
-extern "C" {
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
@@ -622,4 +576,3 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 
     return 0;
 }
-};
