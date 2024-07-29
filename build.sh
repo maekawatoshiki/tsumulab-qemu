@@ -19,4 +19,5 @@ else
     )
 fi
 
-(cd examples && make cvp_trace_plugin -j)
+echo TODO cvp_trace_plugin is not built by default
+# (cd examples && make cvp_trace_plugin -j)
