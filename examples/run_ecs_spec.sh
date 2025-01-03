@@ -11,6 +11,7 @@ ADDRS=$($RISCV/rv${BITS}/bin/riscv${BITS}-unknown-linux-gnu-readelf -s "${BIN}" 
   ret_addr = strtonum("0x"$2) + strtonum($3) - 4
   printf "%x %x\n", entry_addr, ret_addr
 }')
+shift
 
 export TRACE_MAIN_ENTRY_ADDR=${ADDRS%% *}
 export TRACE_DIR="${PWD}/traces"
@@ -32,6 +33,61 @@ if [ "${FORCE_RETRACE}" -ne 0 ] || [ ! -f "${MEM_STATE_PATH}" ] || [ ! -f "${REG
     PLUGIN=$PWD/plugins/libecstrace.so
 
     case "${BINNAME}" in
+    bzip2_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/401.bzip2/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" input.program 10
+        ) &
+        ;;
+    mcf_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/429.mcf/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" inp.in
+        ) &
+        ;;
+    perlbench_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/400.perlbench/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" -I./lib diffmail.pl 2 550 15 24 23 100
+        ) &
+        ;;
+    sjeng_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/458.sjeng/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" train.txt
+        ) &
+        ;;
+    omnetpp_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/471.omnetpp/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" omnetpp.ini
+        ) &
+        ;;
+    astar_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/473.astar/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" BigLakes1024.cfg
+        ) &
+        ;;
+    Xalan_base*)
+        (
+            cd ~/work/SPEC_CPU2006/benchspec/CPU2006/483.xalancbmk/run/run_base_train_rv64g.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" -v allbooks.xml xalanc.xsl
+        ) &
+        ;;
+    perlbench_s_base*)
+        (
+        echo hello
+            cd ~/work/SPECCPU2017/benchspec/CPU/600.perlbench_s/run/run_base_refspeed_rv64g-m64.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" -I./lib checkspam.pl 2500 5 25 11 150 1 1 1 1
+        ) &
+        ;;
+    mcf_s_base*)
+        (
+            cd ~/work/SPECCPU2017/benchspec/CPU/605.mcf_s/run/run_base_refspeed_rv64g-m64.0000
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" inp.in
+        ) &
+        ;;
     go*)
         (
             cd ~/work/SPECCPU95INT/099.go/data/train/input
@@ -41,7 +97,7 @@ if [ "${FORCE_RETRACE}" -ne 0 ] || [ ! -f "${MEM_STATE_PATH}" ] || [ ! -f "${REG
     m88ksim*)
         (
             cd ~/work/SPECCPU95INT/124.m88ksim/data/train/input
-            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" < ctl.in.riscv
+            $QEMU -one-insn-per-tb -d plugin -plugin $PLUGIN "${BIN}" -c < ctl.in.riscv
         ) &
         ;;
     gcc*)
@@ -106,7 +162,7 @@ ECS=$HOME/work/ecs-simulator/ecs
 
 echo "\033[0;32mRunning ecs-simulator with:\033[1;37m\n ${MEM_STATE_PATH}\n ${REG_STATE_PATH}\n ${TRACE_PATH}.xz\033[0m"
 
-xz -T0 -dc "${TRACE_PATH}.xz" | $ECS "${REG_STATE_PATH}" "${MEM_STATE_PATH}"
+xz -T0 -dc "${TRACE_PATH}.xz" | $ECS "${REG_STATE_PATH}" "${MEM_STATE_PATH}" $@
 
 echo "\033[0;32mDone. Check the simulation result.\033[0m"
 
