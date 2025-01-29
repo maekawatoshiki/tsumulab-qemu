@@ -417,7 +417,6 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
         fflags = 65;
         const uint64_t ty = (insn->inst >> 25) & 0x7f;
         switch (ty) {
-            case 0b0010000: case 0b0010001: // FSGNJ.S, FSGNJN.S, FSGNJX.S, FSGNJ.D, FSGNJN.D, FSGNJX.D
             case 0b0101100: case 0b0101101: // FSQRT.D, FSQRT.S
             case 0b0100000: case 0b0100001: // FCVT.S.D, FCVT.D.S
                 off_rs1 = off_rd = 32; // rs1:f,rd:f
@@ -427,6 +426,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             case 0b1110000: case 0b1110001: // FMV.X.W, FCLASS.S, FMV.X.D, FCLASS.D
                 off_rs1 = 32; // rs1:f,rd:x
                 break;
+            case 0b0010000: case 0b0010001: // FSGNJ.S, FSGNJN.S, FSGNJX.S, FSGNJ.D, FSGNJN.D, FSGNJX.D
             case 0b0000000: case 0b0000001: // FADD.S, FADD.D
             case 0b0000100: case 0b0000101: // FSUB.S, FSUB.D
             case 0b0001000: case 0b0001001: // FMUL.S, FMUL.D
