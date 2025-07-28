@@ -431,6 +431,7 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             case 0b0000100: case 0b0000101: // FSUB.S, FSUB.D
             case 0b0001000: case 0b0001001: // FMUL.S, FMUL.D
             case 0b0001100: case 0b0001101: // FDIV.S, FDIV.D
+            case 0b0010100: case 0b0010101: // FMIN.S, FMAX.S, FMIN.D, FMAX.D
                 off_rs1 = off_rs2 = off_rd = 32; // rs1:f,rs2:f,rd:f
                 break;
             case 0b1101000: // FCVT.S.L, FCVT.S.LU, FCVT.S.W, FCVT.S.WU
