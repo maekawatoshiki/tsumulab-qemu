@@ -122,7 +122,7 @@ class Ctx {
     std::ofstream mem_state_file;
     std::ofstream reg_state_file;
 
-    const rv_decode *prev_insn = nullptr;
+    uint64_t last_call_insn_pc = 0;
     std::optional<std::function<void(const rv_decode *next_insn)>>
         pending_trace = std::nullopt;
 
@@ -267,12 +267,12 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
     const rv_decode *insn = (rv_decode *)udata;
     const bool is_compressed = (insn->inst & 0b11) != 0b11;
 
+    if (insn->op == rv_op_jal || insn->op == rv_op_jalr) {
+        ctx.last_call_insn_pc = insn->pc;
+    }
     if (insn->pc == ctx.entry_addr) {
-        assert((ctx.prev_insn->op == rv_op_jal ||
-                ctx.prev_insn->op == rv_op_jalr) &&
-               "Entry address must be reached by call instruction");
         ctx.trace_enabled = true;
-        ctx.exit_addr = ctx.prev_insn->pc + 4;
+        ctx.exit_addr = ctx.last_call_insn_pc + 4;
         INFO("Entry address (0x%lx) reached, enabling tracing", ctx.entry_addr);
         INFO("Setting exit address to 0x%lx", ctx.exit_addr);
         dump_state();
@@ -286,8 +286,6 @@ static void vcpu_insn_exec(unsigned int, void *udata) {
             std::exchange(ctx.pending_trace, std::nullopt).value_or(nullptr)) {
         trace(insn);
     }
-
-    ctx.prev_insn = insn;
 
     if (!ctx.trace_enabled)
         return;
